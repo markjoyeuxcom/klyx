@@ -131,6 +131,14 @@ func (s *ConfigService) ApplyClusterPlan(digest, typed string) ApplyResultDTO {
 			err = ierr
 		}
 	}
+	// Settings S3a §3.6: a committed change puts the running fleet's
+	// subscriptions in force, under the fleet Apply lock: a connection whose
+	// alerts move adopts its block and re-keys
+	if err == nil && fp.d.Resubscribe != nil {
+		if rerr := fp.d.Resubscribe(s.fleetClusters()); rerr != nil {
+			note = strings.TrimSpace(note + " Its alert subscriptions were not re-resolved: " + config.DisplayError(rerr) + ".")
+		}
+	}
 	switch {
 	case errors.Is(err, config.ErrFileChanged), errors.Is(err, config.ErrFleetChangedOnDisk):
 		re := s.planCluster(c)

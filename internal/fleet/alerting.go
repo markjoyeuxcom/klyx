@@ -57,6 +57,10 @@ var amLimits = endpointhttp.Limits{MaxBytes: amMaxBytes, TooLarge: errAMTooLarge
 // Observer's ErrSourceAbsent.
 var ErrNoAlertmanager = fmt.Errorf("%w: no Alertmanager configured or found", observe.ErrSourceAbsent)
 
+// ErrAlertsOff: the cluster's own block says off (Settings S3a §2.2): no
+// alerts are read, and it reads as absent, never as a failure.
+var ErrAlertsOff = fmt.Errorf("%w: alerts are off for this cluster in fleet.yaml", observe.ErrSourceAbsent)
+
 // ErrSourceChanged: the read's generation was keyed to another source; the
 // re-key that follows discards it (S8a §4).
 var ErrSourceChanged = errors.New("the alert source changed during the read; it is read again for the new source")
@@ -79,6 +83,9 @@ type alertmanagerState struct {
 	identity string
 	rekey    func(key string) // re-keys the alerts snapshot (set with the health Observer)
 	client   func(policy safehttp.Policy) *http.Client
+	// buckets read a subscription's installation (Settings S3a §3.2); set
+	// before Start, never after
+	buckets *alertBuckets
 	// configured and resolved make the Alerting capability (S8a §4):
 	// atomics, so the capability set reads them under c.mu without am.mu
 	// (a read holds am.mu while discovery takes c.mu).
@@ -97,13 +104,21 @@ type amDiscovery struct {
 	via       string // how the Service was chosen
 }
 
+// withAlertBuckets gives the connection the fleet's bucket readers, for a
+// subscription (Settings S3a §3.2). Call it before Start.
+func (c *ClusterConn) withAlertBuckets(b *alertBuckets) { c.am.buckets = b }
+
 // WithAlertmanager sets the configured Alertmanager (nil: none, so
 // discovery). Call it in the factory, before Start.
 func (c *ClusterConn) WithAlertmanager(cfg *config.EndpointConfig) *ClusterConn {
 	c.am.cfg = cloneEndpoint(cfg)
-	c.am.configured.Store(cfg != nil)
+	c.am.configured.Store(configuredAM(cfg))
 	return c
 }
+
+// configuredAM is the Alerting capability's configured half: a block that
+// is not off (Settings S3a §2.2).
+func configuredAM(cfg *config.EndpointConfig) bool { return cfg != nil && !cfg.Off }
 
 // alertsPresent is the Alerting capability: an Alertmanager configured, or
 // the last keyed read resolved one.
@@ -127,10 +142,15 @@ func (c *ClusterConn) SetAlertmanagerConfig(cfg *config.EndpointConfig) {
 	c.am.mu.Lock()
 	defer c.am.mu.Unlock()
 	c.am.cfg = cloneEndpoint(cfg)
-	c.am.configured.Store(cfg != nil)
+	c.am.configured.Store(configuredAM(cfg))
 	c.am.disc, c.am.found = nil, nil
 	if c.creds.Revisions != nil {
 		c.creds.Revisions.Bump(c.name, config.EndpointAlertmanager, false)
+	}
+	// a cluster no longer subscribed leaves its bucket: it would never
+	// reach a join again to leave it (Settings S3a §13)
+	if c.am.buckets != nil && (cfg == nil || cfg.Source == "") {
+		c.am.buckets.leave(c.ID())
 	}
 	c.reidentifyLocked()
 }
@@ -145,7 +165,7 @@ func (c *ClusterConn) ChangeAlertmanagerCredential(cfg *config.EndpointConfig, i
 	}
 	if !sameEndpoint(c.am.cfg, cfg) {
 		c.am.cfg = cloneEndpoint(cfg)
-		c.am.configured.Store(cfg != nil)
+		c.am.configured.Store(configuredAM(cfg))
 		c.am.disc, c.am.found = nil, nil
 	}
 	if c.creds.Revisions != nil {
@@ -153,6 +173,15 @@ func (c *ClusterConn) ChangeAlertmanagerCredential(cfg *config.EndpointConfig, i
 	}
 	c.reidentifyLocked()
 	return nil
+}
+
+// reidentify recomputes the identity from the configuration as it is,
+// re-keying the snapshot when it moved: a subscription whose installation
+// or own revision changed under the same block (Settings S3a §5).
+func (c *ClusterConn) reidentify() {
+	c.am.mu.Lock()
+	defer c.am.mu.Unlock()
+	c.reidentifyLocked()
 }
 
 // reidentifyLocked recomputes the identity from the configuration and the
@@ -188,6 +217,13 @@ func (c *ClusterConn) staticSourceLocked() (string, bool) {
 		return "", false
 	}
 	switch {
+	case cfg.Off:
+		return amOffIdentity, true
+	case cfg.Source != "" && c.am.buckets != nil:
+		key, _, _, _ := c.am.buckets.memberKey(c.name)
+		return key, true
+	case cfg.Source != "":
+		return amSubscribedIdentity(cfg.Source), true
 	case cfg.Endpoint != "":
 		at, err := endpointAt(cfg.Endpoint)
 		if err != nil {
@@ -199,6 +235,12 @@ func (c *ClusterConn) staticSourceLocked() (string, bool) {
 	}
 	return "", false
 }
+
+// amOffIdentity and amSubscribedIdentity are the identities of a block that
+// says off, and of a subscription to an installation (Settings S3a §2.2).
+const amOffIdentity = "off"
+
+func amSubscribedIdentity(source string) string { return "source|" + source }
 
 // amIdentity is a source identity: the resolution, the effective location,
 // the tenant and the sorted match set (S8a §4).
@@ -245,6 +287,7 @@ type amSource struct {
 	get      func(ctx context.Context, path string, q url.Values) (int, []byte, error)
 	redactor safehttp.Redactor
 	match    map[string]string
+	tenant   string
 	rev      uint64
 }
 
@@ -264,6 +307,17 @@ func (c *ClusterConn) resolveAlertmanagerLocked(ctx context.Context) (amSource, 
 		tenant, match = cfg.Tenant, cfg.Match
 	}
 	rev := c.creds.Revisions.Revision(c.name, config.EndpointAlertmanager)
+	// Settings S3a §2.2: off reads nothing, and a subscription is read
+	// through its installation - never by discovery in this cluster. This
+	// version does not read through installations yet, so a subscribed
+	// cluster's alerts are unreadable, said as such
+	switch {
+	case cfg != nil && cfg.Off:
+		return amSource{identity: amOffIdentity}, ErrAlertsOff
+	case cfg != nil && cfg.Source != "":
+		return amSource{identity: amSubscribedIdentity(cfg.Source)},
+			fmt.Errorf("this cluster's alerts come from the installation %s, and this version of Klyx does not read through installations yet", cfg.Source)
+	}
 	if cfg != nil && cfg.Endpoint != "" {
 		at, err := endpointAt(cfg.Endpoint)
 		if err != nil {
@@ -276,7 +330,7 @@ func (c *ClusterConn) resolveAlertmanagerLocked(ctx context.Context) (amSource, 
 		client := c.amClient(endpointhttp.DirectPolicy(amLimits, amHTTPTimeout, cfg.TLSSkipVerify))
 		d := endpointhttp.NewDirect(strings.TrimRight(cfg.Endpoint, "/"), auth, client, amLimits)
 		return amSource{identity: amIdentity("endpoint", at, tenant, match), display: at, get: d.Get,
-			redactor: d.Redactor(), match: match, rev: rev}, nil
+			redactor: d.Redactor(), match: match, tenant: tenant, rev: rev}, nil
 	}
 	if cfg != nil && cfg.ServiceRef != nil {
 		svc := serviceOf(cfg.ServiceRef)
@@ -308,7 +362,66 @@ func (c *ClusterConn) proxySourceLocked(svc endpointhttp.Service, identity, disp
 		return amSource{identity: identity}, fmt.Errorf("the service-proxy client could not be built: %w", err)
 	}
 	p := endpointhttp.NewProxy(rc, svc, tenant, amLimits)
-	return amSource{identity: identity, display: display, get: p.Get, match: match, rev: rev}, nil
+	return amSource{identity: identity, display: display, get: p.Get, match: match, tenant: tenant, rev: rev}, nil
+}
+
+// legacySentence is the scope sentence of a cluster's own block or
+// discovery (Settings S3a §3.5): where, in this cluster or at its URL, the
+// tenant, and the filter - or that nothing is filtered.
+func legacySentence(src amSource) string {
+	where := "from " + src.display
+	if strings.HasPrefix(src.identity, "service|") {
+		where = "from the " + src.display + " on this cluster"
+	}
+	parts := []string{where}
+	if src.tenant != "" {
+		parts = append(parts, "tenant "+src.tenant)
+	}
+	if len(src.match) == 0 {
+		parts = append(parts, "unfiltered: everything there is read as this cluster's")
+	} else {
+		words := make([]string, 0, len(src.match))
+		for k, v := range alertmanager.DisplayMatch(src.match, src.redactor) {
+			words = append(words, k+"="+v)
+		}
+		sort.Strings(words)
+		parts = append(parts, "filtered by "+strings.Join(words, ", "))
+	}
+	return src.redactor.Text(strings.Join(parts, ", "))
+}
+
+// legacyLineage is a legacy read's provenance (Settings S3a §3.4): its
+// mode, the source identity it was keyed to, and the credential revision.
+func legacyLineage(src amSource) alertmanager.Lineage {
+	mode := config.AMDiscovered
+	switch {
+	case strings.HasPrefix(src.identity, "endpoint|"):
+		mode = config.AMDirect
+	case strings.HasPrefix(src.identity, "service|"):
+		mode = config.AMService
+	}
+	return alertmanager.Lineage{Mode: mode, Identity: src.identity, Tenant: src.tenant, CredRev: src.rev}
+}
+
+// amProxyREST is the connection's guarded service-proxy client with the
+// Alertmanager limits, for an installation it hosts (Settings S3a §3.1).
+func (c *ClusterConn) amProxyREST() (rest.Interface, error) {
+	c.am.mu.Lock()
+	defer c.am.mu.Unlock()
+	return c.amRESTLocked()
+}
+
+// publishedUsability is the connection's usability incarnation as
+// published, and whether it is usable now: an incarnation still pending
+// publication is not yet in force (Settings S3a §3.4, S2 §12).
+func (c *ClusterConn) publishedUsability() (uint64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	inc := c.usableInc
+	if c.pending && inc > 0 {
+		inc--
+	}
+	return inc, c.state.Usable() && !c.pending
 }
 
 // amRESTLocked is the guarded service-proxy client with the Alertmanager
@@ -537,6 +650,67 @@ func (c *ClusterConn) proveGoverning(ctx context.Context, ns string, amUID types
 // match as filter; the credential fence; Reduce, the match re-check, the
 // entry cap and the display values.
 func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.Read, error) {
+	r, _, err := c.ReadAlertsAt(ctx, key)
+	return r, err
+}
+
+// ReadAlertsAt is ReadAlerts with the time the alerts were acquired, zero
+// for the time the read lands: a subscribed member's share keeps its
+// bucket read's time (Settings S3a §3.2).
+func (c *ClusterConn) ReadAlertsAt(ctx context.Context, key string) (alertmanager.Read, time.Time, error) {
+	c.am.mu.Lock()
+	subscribed := c.am.cfg != nil && c.am.cfg.Source != "" && c.am.buckets != nil
+	c.am.mu.Unlock()
+	if subscribed {
+		return c.readSubscribed(ctx, key)
+	}
+	r, err := c.readOwn(ctx, key)
+	return r, time.Time{}, err
+}
+
+// readSubscribed is a subscribed member's read (S3a §3.2): its key is its
+// lineage, and a generation keyed otherwise re-keys - leaving its bucket -
+// before the member joins its new one. No fleet-wide slot is held while it
+// waits: the bucket's read holds one.
+func (c *ClusterConn) readSubscribed(ctx context.Context, key string) (alertmanager.Read, time.Time, error) {
+	c.am.readMu.Lock()
+	defer c.am.readMu.Unlock()
+	b := c.am.buckets
+	c.am.mu.Lock()
+	id, sub, access, ok := b.memberKey(c.name)
+	c.am.identity = id
+	if id != key {
+		if c.am.rekey != nil {
+			c.am.rekey(id)
+		}
+		c.am.mu.Unlock()
+		b.leave(c.ID())
+		return alertmanager.Read{Identity: id}, time.Time{}, ErrSourceChanged
+	}
+	c.am.resolved.Store(true)
+	c.am.mu.Unlock()
+	if !ok {
+		return alertmanager.Read{Identity: id}, time.Time{}, errors.New("this cluster's subscription is not in force; Klyx reads it once it is applied")
+	}
+	r, at, err := b.read(ctx, c.ID(), sub, key, access)
+	if errors.Is(err, errSubscriptionMoved) {
+		// re-keyed to the subscription now in force, as at the start of a
+		// read (Codex's review of S3a-2, R1)
+		c.am.mu.Lock()
+		id, _, _, _ := b.memberKey(c.name)
+		c.am.identity = id
+		if c.am.rekey != nil {
+			c.am.rekey(id)
+		}
+		c.am.mu.Unlock()
+		b.leave(c.ID())
+		return alertmanager.Read{Identity: id}, time.Time{}, ErrSourceChanged
+	}
+	return r, at, err
+}
+
+// readOwn is the read of the cluster's own block, or discovery (S8a).
+func (c *ClusterConn) readOwn(ctx context.Context, key string) (alertmanager.Read, error) {
 	c.am.readMu.Lock()
 	defer c.am.readMu.Unlock()
 	// the fleet-wide slot covers the whole read, discovery's GETs included
@@ -561,7 +735,7 @@ func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.
 		return alertmanager.Read{Identity: src.identity}, ErrSourceChanged
 	}
 	// the read's own outcome for its key is the capability's evidence
-	c.am.resolved.Store(!errors.Is(err, ErrNoAlertmanager))
+	c.am.resolved.Store(!errors.Is(err, ErrNoAlertmanager) && !errors.Is(err, ErrAlertsOff))
 	c.am.mu.Unlock()
 	if err != nil {
 		return alertmanager.Read{Identity: src.identity}, err
@@ -594,7 +768,7 @@ func (c *ClusterConn) ReadAlerts(ctx context.Context, key string) (alertmanager.
 		}
 	}
 	reduced := alertmanager.Reduce(kept, groups)
-	out := alertmanager.Read{Identity: src.identity, Source: src.redactor.Text(src.display), Match: alertmanager.DisplayMatch(src.match, src.redactor)}
+	out := alertmanager.Read{Identity: src.identity, Source: legacySentence(src), Match: alertmanager.DisplayMatch(src.match, src.redactor), Lineage: legacyLineage(src)}
 	if len(reduced) > amMaxAlerts {
 		reduced, out.Truncated = reduced[:amMaxAlerts], true
 	}
@@ -693,6 +867,10 @@ func amIdentityOf(e *config.EndpointConfig) string {
 		at, _ = endpointAt(e.Endpoint)
 	case e.ServiceRef != nil:
 		at = serviceAt(serviceOf(e.ServiceRef))
+	case e.Off:
+		at = amOffIdentity
+	case e.Source != "":
+		at = amSubscribedIdentity(e.Source) + "|scope=" + e.Scope
 	}
 	return amIdentity("cfg", at, e.Tenant, e.Match)
 }

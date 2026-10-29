@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moomora/klyx/internal/alertmanager"
+	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/cluster"
 	"github.com/moomora/klyx/internal/config"
 	"github.com/moomora/klyx/internal/fleetindex"
@@ -40,10 +42,185 @@ type Registry struct {
 	healthSink observe.Sink
 	index      *fleetindex.Index
 	onUsable   func(UsabilityEvent)
+	// alerts are the bucket readers of the installations in force
+	// (Settings S3a §3.2); nil without any
+	alerts *alertBuckets
 }
 
 func NewRegistry(cfg *config.Config, factory ConnFactory) *Registry {
 	return &Registry{cfg: cfg, factory: factory, retired: map[ConnID]bool{}}
+}
+
+// EnableAlertSources gives every connection built from now on the bucket
+// readers of the installations in force (Settings S3a §3.2). Call it
+// before Start.
+func (r *Registry) EnableAlertSources(ctx context.Context, a *AlertSources, creds Credentials, clk clock.Clock) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.alerts = newAlertBuckets(ctx, a, creds, clk, func(name string) (*ClusterConn, bool) {
+		c, ok := r.Conn(name)
+		cc, is := c.(*ClusterConn)
+		return cc, ok && is
+	})
+}
+
+// SetHostLeaser admits every bucket read on its host through S2's
+// admission (Settings S3a §13).
+func (r *Registry) SetHostLeaser(l HostLeaser) {
+	r.mu.RLock()
+	b := r.alerts
+	r.mu.RUnlock()
+	if b != nil {
+		b.mu.Lock()
+		b.leaser = l
+		b.mu.Unlock()
+	}
+}
+
+// AlertSources are the installations in force, nil without the bucket
+// readers.
+func (r *Registry) AlertSources() *AlertSources {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.alerts == nil {
+		return nil
+	}
+	return r.alerts.sources
+}
+
+// Resubscribe puts the running fleet's subscriptions in force after an S2
+// commit (Settings S3a §3.6): the subscriptions that changed move their
+// revisions, and each connection whose block changes adopts it, re-keying
+// its alerts.
+func (r *Registry) Resubscribe(running []config.ClusterConfig) error {
+	a := r.AlertSources()
+	if a == nil {
+		return nil
+	}
+	return r.PublishSources(a.Sources(), running)
+}
+
+// PublishSources puts sources and the running fleet's subscriptions in
+// force (Settings S3a §5, an Observability Apply's publication): the
+// installations and subscriptions that changed move their revisions, and
+// each connection whose block changes adopts it, re-keying its alerts. It
+// runs under the fleet Apply lock, from a resolution already checked.
+func (r *Registry) PublishSources(sources []config.SourceConfig, running []config.ClusterConfig) error {
+	a := r.AlertSources()
+	if a == nil {
+		return nil
+	}
+	changed, err := a.Apply(sources, running)
+	if err != nil {
+		return err
+	}
+	moved := map[string]bool{}
+	for _, name := range changed {
+		moved[name] = true
+	}
+	for _, cc := range running {
+		c, ok := r.Conn(cc.Name)
+		cl, is := c.(*ClusterConn)
+		if !ok || !is {
+			continue
+		}
+		if want := config.ConnectionAlertmanager(sources, cc); !sameEndpoint(cl.AlertmanagerConfig(), want) {
+			cl.SetAlertmanagerConfig(want)
+		} else if moved[cc.Name] {
+			// its installation or subscription moved under the same block:
+			// re-keyed now, not at its next read (Codex's review of S3a-4a, R5)
+			cl.reidentify()
+		}
+	}
+	return nil
+}
+
+// InstallationStatus reads an installation's status once, as the person
+// tests it (Settings S3a §5): the installation at the revision reviewed,
+// through the transport its reads take, in a fleet-wide slot, and never
+// into a bucket's outcome. The request is fenced as a bucket's is, before
+// and after, by that revision, its host, its access and its credential
+// (Codex's review of S3a-4a, R3). An observed 401 or 403 is reported, not
+// counted as a loss of access.
+func (r *Registry) InstallationStatus(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error) {
+	a := r.AlertSources()
+	r.mu.RLock()
+	b := r.alerts
+	r.mu.RUnlock()
+	if a == nil || b == nil {
+		return alertmanager.Status{}, "", errors.New("no installation is in force")
+	}
+	src, rev, ok := a.Installation(id)
+	if !ok {
+		return alertmanager.Status{}, "", fmt.Errorf("%s is not in force", id)
+	}
+	if rev != revision {
+		return alertmanager.Status{}, "", fmt.Errorf("%s changed since it was shown: review it again", id)
+	}
+	if err := b.hostDown(src); err != nil {
+		return alertmanager.Status{}, "", err
+	}
+	access := b.access(src)
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+	select {
+	case amReads <- struct{}{}:
+		defer func() { <-amReads }()
+	case <-ctx.Done():
+		return alertmanager.Status{}, "", fmt.Errorf("%s was not read in time: %w", id, ctx.Err())
+	}
+	var credRev uint64
+	if src.Endpoint != "" {
+		credRev = b.creds.Revisions.Revision("source/"+id, config.EndpointAlertmanager)
+	}
+	check := func() error {
+		if _, now, ok := a.Installation(id); !ok || now != revision {
+			return fmt.Errorf("%s changed during the test, so nothing is said of it", id)
+		}
+		if err := b.hostDown(src); err != nil {
+			return err
+		}
+		if b.access(src) != access {
+			return fmt.Errorf("%s's access changed during the test", id)
+		}
+		if src.Endpoint != "" && b.creds.Revisions.Revision("source/"+id, config.EndpointAlertmanager) != credRev {
+			return fmt.Errorf("%s's credential changed during the test", id)
+		}
+		return nil
+	}
+	tr, err := b.transport(ctx, cancel, src, rev, src.Tenant, credRev, "a test of "+id)
+	if err != nil {
+		return alertmanager.Status{}, "", err
+	}
+	defer tr.release()
+	red := tr.am.redactor
+	st, err := bucketGet(ctx, tr.am, "/api/v2/status", nil, alertmanager.ParseStatus, check)
+	if errors.Is(err, errAccessDenied) {
+		err = fmt.Errorf("%s refused Klyx's read (401 or 403)", id)
+	}
+	if err != nil {
+		return alertmanager.Status{}, red.Text(tr.display), err
+	}
+	st.Version, st.ClusterStatus = alertmanager.Clip(red.Text(st.Version), alertmanager.MaxLabelValue), alertmanager.Clip(red.Text(st.ClusterStatus), alertmanager.MaxLabelValue)
+	return st, red.Text(tr.display), nil
+}
+
+// InstallationRead is an installation's latest read (S3a §8).
+func (r *Registry) InstallationRead(id string) (InstallationRead, bool) {
+	r.mu.RLock()
+	b := r.alerts
+	r.mu.RUnlock()
+	if b == nil {
+		return InstallationRead{}, false
+	}
+	return b.lastRead(id)
+}
+
+// withAlerts gives a connection the bucket readers, when there are any.
+func (r *Registry) withAlerts(c Conn) {
+	if cc, ok := c.(*ClusterConn); ok && r.alerts != nil {
+		cc.withAlertBuckets(r.alerts)
+	}
 }
 
 // identityOf is a connection's identity: its own, or one drawn for a
@@ -68,6 +245,9 @@ func (r *Registry) Start(ctx context.Context) {
 	defer r.indexClustersLocked()
 	for _, cc := range r.cfg.Clusters {
 		conn, err := r.factory(cc)
+		if err == nil {
+			r.withAlerts(conn)
+		}
 		if err != nil {
 			r.entries = append(r.entries, &entry{name: cc.Name, cc: cc, failed: true, failMsg: failedMsg(err)})
 			continue
@@ -123,6 +303,9 @@ func (r *Registry) Prepare(cc config.ClusterConfig) (*Prepared, error) {
 	if err != nil {
 		return nil, errors.New(failedMsg(err))
 	}
+	r.mu.RLock()
+	r.withAlerts(conn)
+	r.mu.RUnlock()
 	return &Prepared{conn: conn, cc: cc, id: identityOf(conn)}, nil
 }
 

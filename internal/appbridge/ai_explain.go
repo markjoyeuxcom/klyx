@@ -67,7 +67,10 @@ func (s *AIService) Explain(cluster string, t ExplainTargetDTO) AIResultDTO {
 		return AIResultDTO{Error: refusal}
 	}
 	defer done()
-	ctx, cancel := context.WithTimeout(readfence.With(le.Ctx, fence), ai.Deadline(ai.PurposeExplain))
+	// the alerts its evidence reads are fenced by their lineage (S3a §4.3)
+	lctx, fence, done := withLineages(le.Ctx, cluster, fence)
+	defer done()
+	ctx, cancel := context.WithTimeout(readfence.With(lctx, fence), ai.Deadline(ai.PurposeExplain))
 	defer cancel()
 
 	var (

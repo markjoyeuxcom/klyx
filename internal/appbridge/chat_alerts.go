@@ -78,6 +78,12 @@ func (t *chatTools) alerts(ctx context.Context, kind, ns, name string) ChatToolR
 	if !ok {
 		return t.failed(toolAlerts, "observer", target, errors.New("the alerts snapshot could not be read"))
 	}
+	if t.record != nil {
+		// an empty read and stale rows carry it too (Settings S3a §4.2)
+		if err := t.record(ar.Lineage); err != nil {
+			return t.failed(toolAlerts, "observer", target, err)
+		}
+	}
 	seen, stale := alertsSeenAt(rows.Part)
 	env := chatEnvelope{Tool: toolAlerts, Source: "observer", ReadAt: t.stamp(), Complete: !ar.Truncated && !stale}
 	p := &projector{}

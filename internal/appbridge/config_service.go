@@ -425,6 +425,18 @@ func (s *ConfigService) AddClusters(contexts []string) ActionResultDTO {
 			return ActionResultDTO{Error: n + " is already running, so nothing was added: use the file's values to remove it first"}
 		}
 	}
+	// Settings S3a §3.6: the running fleet with these clusters must resolve
+	// against the installations in force before anything is written
+	// (Codex's review of S3a-2, R5)
+	if s.fp != nil && s.fp.d.ResolveSources != nil {
+		cand := s.fleetClusters()
+		for _, name := range contexts {
+			cand = append(cand, config.ClusterConfigForContext(name))
+		}
+		if err := s.fp.d.ResolveSources(cand); err != nil {
+			return ActionResultDTO{Error: "with these clusters, the alert installations do not resolve, so nothing was added: " + config.DisplayError(err)}
+		}
+	}
 	// each connection is prepared before anything is written, so one that
 	// cannot be built adds nothing (S2 §4.5; Codex's review of S2b, R6)
 	var prepared []*fleet.Prepared
@@ -506,11 +518,23 @@ func (s *ConfigService) installAdded(contexts []string, prepared []*fleet.Prepar
 			failed = append(failed, fmt.Sprintf("%s: %v", cc.Name, err))
 		}
 	}
+	// the running fleet's subscriptions in force, as a fleet Apply puts
+	// them (S3a §3.6; Codex's review of S3a-2, R5): the clusters that
+	// joined it, and none that failed to
+	var unresolved string
+	if s.fp.d.Resubscribe != nil {
+		if err := s.fp.d.Resubscribe(s.fleetClusters()); err != nil {
+			unresolved = " Their alert subscriptions were not re-resolved: " + config.DisplayError(err) + "."
+		}
+	}
 	if s.fp.d.Changed != nil {
 		s.fp.d.Changed()
 	}
 	if len(failed) > 0 {
-		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry."}
+		return ActionResultDTO{Error: "added to fleet.yaml, but connecting failed - " + strings.Join(failed, "; ") + ". Restart Klyx to retry." + unresolved}
+	}
+	if unresolved != "" {
+		return ActionResultDTO{Error: "added and connected." + unresolved}
 	}
 	return ActionResultDTO{OK: true}
 }

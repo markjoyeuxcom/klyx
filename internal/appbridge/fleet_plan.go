@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,6 +79,17 @@ type FleetPlanDeps struct {
 	// Hosts are the installations naming the cluster as their host: a
 	// removal is refused while there are any (S2 §4.4; S3a fills it)
 	Hosts func(cluster string) []string
+	// Alertmanager is the block a connection for an entry would use,
+	// resolved against the active installations (Settings S3a §2.2)
+	Alertmanager func(config.ClusterConfig) *config.EndpointConfig
+	// ResolveSources checks that a runtime candidate - the running fleet
+	// with a plan's change - resolves against the installations in force;
+	// SourcesRevision is their revision, which a plan binds; Resubscribe
+	// puts the running fleet's subscriptions in force after a commit, each
+	// changed connection adopting its block (Settings S3a §3.6)
+	ResolveSources  func(running []config.ClusterConfig) error
+	SourcesRevision func() uint64
+	Resubscribe     func(running []config.ClusterConfig) error
 	// EndEpochWork ends a cluster's conversations explicitly at a committed
 	// protection change (S2 §8, ruling 1)
 	EndEpochWork func(cluster, why string)
@@ -540,7 +552,11 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 		}
 		if fp.d.Hosts != nil {
 			if hosts := fp.d.Hosts(name); len(hosts) > 0 {
-				return refuse(name + " hosts " + strings.Join(hosts, ", ") + ": remove those first")
+				shown := make([]string, len(hosts))
+				for i, h := range hosts {
+					shown[i] = shownInstallation(h)
+				}
+				return refuse(name + " hosts " + strings.Join(shown, ", ") + ": remove those first")
 			}
 		}
 	case classReconnect, classAddition:
@@ -549,6 +565,17 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 				return refuse("Klyx cannot connect with these terms, so nothing was planned: " + config.DisplayError(err))
 			}
 		}
+	}
+	// Settings S3a §3.6: the runtime candidate - the running fleet with this
+	// change, the installations in force - must resolve; the plan binds
+	// their revision, and the commit re-resolves
+	if fp.d.ResolveSources != nil {
+		if err := fp.d.ResolveSources(s.runtimeCandidate(x.class, name, x.cand)); err != nil {
+			return refuse("with this change, the alert installations do not resolve: " + config.DisplayError(err))
+		}
+	}
+	if fp.d.SourcesRevision != nil {
+		x.plan.Runtime["sources"] = strconv.FormatUint(fp.d.SourcesRevision(), 10)
 	}
 
 	// what it shows
@@ -576,6 +603,12 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 			from = config.ClusterConfig{Name: name}
 		}
 		x.plan.Changes = clusterChanges(from, x.cand, running, published)
+		// where its alerts come from, when the change moves it (S3a §3.6)
+		if fp.d.Alertmanager != nil && running {
+			if was, now := fp.d.Alertmanager(run), fp.d.Alertmanager(x.cand); amSourceKey(was) != amSourceKey(now) {
+				x.plan.Changes = append(x.plan.Changes, PlanChangeDTO{ID: "fleet.alerts", Label: "Alerts", From: amSourceOf(was), To: amSourceOf(now)})
+			}
+		}
 		x.plan.Writes = x.edit != nil
 		if published && !x.cand.IsProtected() {
 			x.plan.Interlock = &InterlockDTO{Phrase: name, Why: "Destructive actions on " + name + " will no longer ask for its name to be typed, and AI egress stops treating it as protected."}
@@ -847,6 +880,97 @@ func (s *ConfigService) GetClusterEntry(name string) ClusterEntryDTO {
 		out.ContextsError = err.Error()
 	} else {
 		out.Contexts = append(out.Contexts, ctxs...)
+	}
+	return out
+}
+
+// amSourceOf says where an Alertmanager block's alerts come from, in words
+// (Settings S3a §2.2). A long installation id is named by its length
+// alone, so two sources are compared by amSourceKey, never by these words.
+func amSourceOf(e *config.EndpointConfig) string {
+	if e != nil && !e.Off && e.Source != "" {
+		if _, withheld := config.Withheld(e.Source); withheld {
+			return shownInstallation(e.Source)
+		}
+		return "the installation " + e.Source
+	}
+	switch amSourceKey(e) {
+	case "off":
+		return "off"
+	case "endpoint":
+		return "its own endpoint"
+	case "service":
+		return "its own Service"
+	}
+	return "discovery in the cluster"
+}
+
+// amSourceKey is where an Alertmanager block's alerts come from, for a
+// comparison: an installation by its id itself.
+func amSourceKey(e *config.EndpointConfig) string {
+	switch {
+	case e == nil:
+		return "discovery"
+	case e.Off:
+		return "off"
+	case e.Source != "":
+		return "source/" + e.Source
+	case e.Endpoint != "":
+		return "endpoint"
+	case e.ServiceRef != nil:
+		return "service"
+	}
+	return "discovery"
+}
+
+// shownInstallation names an installation in a message: by its id, or by
+// the id's length alone where the loader's diagnostics withhold a value
+// (Codex's re-review 2 of S3a-1, R2-1).
+func shownInstallation(id string) string {
+	if n, withheld := config.Withheld(id); withheld {
+		return "an installation whose id has " + strconv.Itoa(n) + " characters"
+	}
+	return id
+}
+
+// SourceHosts is the host check S2 left for S3a (S2 §4.4, S3a §3.6): the
+// installations naming a cluster as their host, both those in force and
+// those in fleet.yaml now, so a removal leaves neither a running
+// dependency nor one still to be applied without its host. A file that
+// does not load adds none: its own refusal says why.
+func SourceHosts(path string, active func() []config.SourceConfig) func(cluster string) []string {
+	return func(cluster string) []string {
+		hosts := config.HostedBy(active(), cluster)
+		if eff, _, _, err := config.LoadRaw(path); err == nil {
+			for _, id := range config.HostedBy(eff.Sources, cluster) {
+				if !slices.Contains(hosts, id) {
+					hosts = append(hosts, id)
+				}
+			}
+		}
+		sort.Strings(hosts)
+		return hosts
+	}
+}
+
+// runtimeCandidate is the running fleet with a plan's change (S3a §5): the
+// entry replaced, added, or removed.
+func (s *ConfigService) runtimeCandidate(class, name string, cand config.ClusterConfig) []config.ClusterConfig {
+	run := s.fleetClusters()
+	out := make([]config.ClusterConfig, 0, len(run)+1)
+	found := false
+	for _, c := range run {
+		if c.Name != name {
+			out = append(out, c)
+			continue
+		}
+		found = true
+		if class != classRemoval {
+			out = append(out, cand)
+		}
+	}
+	if !found && class != classRemoval {
+		out = append(out, cand)
 	}
 	return out
 }

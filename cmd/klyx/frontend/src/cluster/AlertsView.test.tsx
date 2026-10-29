@@ -205,6 +205,12 @@ describe("AlertsView after the implementation review", () => {
 });
 
 describe("the inspector's Alerts block (S8a §7)", () => {
+  it("says the scope sentence: where the alerts come from (Settings S3a §3.5)", () => {
+    set([al("OnPod")], part(), { alertsSource: "from lgtm-we, hosted by prd, tenant ops, filtered by cluster=dev", alertsTruncated: false });
+    render(<Block target={{ uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" }} />);
+    expect(screen.getByTestId("insp-alerts-source").textContent).toBe("from lgtm-we, hosted by prd, tenant ops, filtered by cluster=dev");
+  });
+
   it("renders nothing without an Alertmanager; lists the object's alerts and its pods' apart", () => {
     set([], part({ coverage: "absent", kinds: [kindCov({ coverage: "absent" })] }), null);
     const { unmount } = render(<Block target={{ uid: "pod-uid", kind: "Pod", namespace: "team", name: "api-1" }} />);

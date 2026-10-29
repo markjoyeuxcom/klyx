@@ -84,7 +84,7 @@ func TestEveryEntryIsComplete(t *testing.T) {
 			t.Errorf("%s: source %q", id, e.Source)
 		case !known(e.TakesEffect, Now, OnSave, Reconnect, Restart, OnAction):
 			t.Errorf("%s: takes effect %q", id, e.TakesEffect)
-		case !known(e.Scope, "fleet", "cluster", "endpoint", "profile", "process", "webview"):
+		case !known(e.Scope, "fleet", "cluster", "endpoint", "installation", "subscription", "profile", "process", "webview"):
 			t.Errorf("%s: scope %q", id, e.Scope)
 		case strings.Contains(e.Effect+e.Label+e.Save+e.Validation, "—"):
 			t.Errorf("%s: an em dash", id)
@@ -188,6 +188,16 @@ func TestCredentialsAreTheirOwnEntries(t *testing.T) {
 	for id, e := range byID(t) {
 		if (e.Source == FromCredential) != strings.HasPrefix(id, "credential.") {
 			t.Errorf("%s: source %s", id, e.Source)
+		}
+	}
+}
+
+// The registry says what the loader accepts: alertmanager.off is true or
+// left out (Codex's re-review of S3a-1, RR3).
+func TestOffSaysWhatTheLoaderAccepts(t *testing.T) {
+	for _, e := range Registry() {
+		if e.ID == "clusters[].alertmanager.off" && !strings.HasPrefix(e.Validation, "true, or left out") {
+			t.Fatalf("off: %q", e.Validation)
 		}
 	}
 }

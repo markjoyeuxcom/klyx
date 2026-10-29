@@ -48,6 +48,40 @@ export async function within<T>(ms: number, what: string, f: () => T | null | un
 
 // sized: an element with a measurable box. A hidden window that lays nothing
 // out is unmeasurable - never a pass.
+// afterward runs a step's body; when it fails after creating something,
+// cleanup removes it, and both failures are reported - the body's, and the
+// cleanup's (Codex's review of S3a-4c, R7). Nothing the body did not
+// create is ever removed: created says whether it did.
+export async function afterward<T>(body: () => Promise<T>, created: () => boolean, cleanup: () => Promise<unknown>): Promise<T> {
+  try {
+    return await body();
+  } catch (e) {
+    if (created()) {
+      let left = "";
+      await cleanup().catch((c: unknown) => { left = c instanceof Error ? c.message : String(c); });
+      if (left && e instanceof Error) e.message += `; and what the step created could not be removed: ${left}`;
+    }
+    throw e;
+  }
+}
+
+// restore puts back what a failed step created, when the page may not
+// show it yet (Codex's re-review of S3a-4c, RR3): it reads the rows again
+// (retry) and waits for the thing to be shown, then removes it; an
+// acknowledged creation never shown is said, never ignored; one neither
+// shown nor acknowledged is left alone.
+export async function restore(o: { shown: () => boolean; retry: () => void; remove: () => Promise<unknown>; acknowledged: boolean; waitMs?: number }): Promise<void> {
+  if (!o.shown()) {
+    o.retry();
+    await within(o.waitMs ?? 10_000, "what the step created, shown again", o.shown).catch(() => null);
+  }
+  if (o.shown()) {
+    await o.remove();
+    return;
+  }
+  if (o.acknowledged) throw new Error("it was applied but is not shown: remove it by hand");
+}
+
 export function sized(el: Element | null, what: string): DOMRect {
   if (!el) throw new Error(`no ${what}`);
   const r = el.getBoundingClientRect();
@@ -1366,6 +1400,81 @@ export async function walk(settings: SmokeSettings): Promise<Step[]> {
     await open("flux");
     await within(30_000, "the Flux lens restored", () => byText<HTMLElement>(".lens-row", /a1-web/));
     return { changes: r.changes, ends: r.ends };
+  });
+
+  // ---- Settings S3a §8: an installation hosted by the lab cluster,
+  // serving aks-stg-weu by name, applied through its plan, tested through
+  // its host, then removed with its plan, so the smoke fleet ends as it
+  // began. The lab cluster keeps its own (legacy) block, which the page
+  // shows as it is. ----
+  await step(steps, "Settings > Observability: an installation applied as a plan, tested, then removed", async () => {
+    useFleet.getState().openSettings("observability");
+    await within(8000, "the alert sources", () => $("[data-testid='sources-sentence']"));
+    if ($("[data-testid='sources-file-differs']")) throw new Error("the smoke fleet's alert sources differ from the ones in force");
+    const sub = (c: string) => [...document.querySelectorAll<HTMLElement>("[data-testid='subscription-row']")].find((r) => r.dataset.cluster === c) ?? null;
+    const inst = () => $<HTMLElement>("[data-testid='installation-row'][data-installation='lab-am']");
+    const own = (await within(8000, `${cluster}'s alerts`, () => sub(cluster))).querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
+    if (!/klyx-s8-lab\/alertmanager:web/.test(own)) throw new Error(`${cluster}'s own block: ${own}`);
+    // the add's outcome, apart from what the rows show: attempted once its
+    // Apply is clicked, acknowledged once Applied is said
+    let attempted = false;
+    let acknowledged = false;
+    const applyPlan = async (what: string, onApply?: () => void) => {
+      const plan = await within(8000, `the plan to ${what}`, () => $("[data-testid='settings-plan']"));
+      const refused = plan.querySelector("[data-testid='plan-refused']");
+      if (refused) throw new Error(`the plan to ${what} was refused: ${refused.textContent}`);
+      const changes = [...plan.querySelectorAll("[data-testid='plan-changes'] li")].map((li) => li.textContent ?? "");
+      (await within(4000, "Apply", () => byText<HTMLButtonElement>("[data-testid='settings-plan'] button", /^Apply$/))).click();
+      onApply?.();
+      // Applied, qualified or not, is acknowledged; read back is only the
+      // plain Applied (Codex's re-review of S3a-4c, RR3)
+      const banner = await within(20_000, `${what}, applied`, () => !$("[data-testid='settings-plan']") && byText<HTMLElement>("[data-testid='sources-banner']", /Applied:/));
+      acknowledged ||= !!onApply;
+      if (!/^Applied:/.test(banner.textContent?.trim() ?? "") || /failed/.test(banner.textContent ?? "")) throw new Error(`${what} was applied, but not read back: ${banner.textContent?.trim()}`);
+      return changes;
+    };
+    // the walk removes what it created even when a later check fails, and
+    // never what it did not create (Codex's review of S3a-4c, R7)
+    if (inst()) throw new Error("lab-am is in force before the walk: a previous run left it; remove it by hand");
+    const removeIt = async (what: string) => {
+      byText<HTMLButtonElement>("[data-testid='settings-plan'] button", /^Cancel$/)?.click();
+      (await within(8000, "Remove", () => $<HTMLButtonElement>("button[aria-label='remove lab-am']:not([disabled])"))).click();
+      const changes = await applyPlan(what);
+      await within(8000, "lab-am gone", () => !inst());
+      return changes;
+    };
+    return afterward(async () => {
+      (await within(4000, "Add an installation", () => byText<HTMLButtonElement>("[data-testid='sources-panel'] button", /^Add an installation$/))).click();
+      const ed = await within(8000, "the installation editor", () => $<HTMLElement>("[data-testid='installation-editor']"));
+      const input = (id: string) => ed.querySelector<HTMLInputElement>(`[data-setting='${id}'] input`)!;
+      typeInto(input("sources[].id"), "lab-am");
+      chooseOption(ed.querySelector<HTMLSelectElement>("[data-setting='sources[].host'] select")!, cluster);
+      typeInto(input("sources[].serviceRef.namespace"), "klyx-s8-lab");
+      typeInto(input("sources[].serviceRef.name"), "alertmanager");
+      typeInto(input("sources[].serviceRef.port"), "web");
+      typeInto(input("sources[].memberLabel"), "cluster");
+      (await within(4000, "add to cluster", () => ed.querySelector<HTMLButtonElement>("button[aria-label='add to cluster']"))).click();
+      typeInto(await within(4000, "the served cluster", () => ed.querySelector<HTMLInputElement>("input[aria-label='cluster 1']")), "aks-stg-weu");
+      (await within(4000, "Review and apply", () => byText<HTMLButtonElement>("[data-testid='installation-editor'] button", /^Review and apply$/))).click();
+      const added = await applyPlan("add lab-am", () => { attempted = true; });
+      await within(8000, "lab-am in force", inst);
+      const scope = await within(8000, "aks-stg-weu subscribed", () => {
+        const t = sub("aks-stg-weu")?.querySelector("[data-testid='subscription-sentence']")?.textContent ?? "";
+        return /lab-am/.test(t) && /cluster=aks-stg-weu/.test(t) ? t : null;
+      });
+      // Test reads the installation's status through its host
+      (await within(4000, "Test", () => $<HTMLButtonElement>("button[aria-label='test lab-am']:not([disabled])"))).click();
+      const test = await within(20_000, "the Test's answer", () => byText<HTMLElement>("[data-testid='sources-banner']", /^Available: Alertmanager 0\.34\.1/));
+      const removed = await removeIt("remove lab-am");
+      attempted = false; // removed: nothing of the step's is left to restore
+      if ($("[data-testid='sources-file-differs']")) throw new Error("fleet.yaml and the sources in force differ after the removal");
+      return { added, scope: scope.trim(), test: test.textContent?.trim(), removed };
+    }, () => attempted, () => restore({
+      shown: () => !!inst(),
+      retry: () => byText<HTMLButtonElement>("[data-testid='sources-reread-failed'] button", /^Retry$/)?.click(),
+      remove: () => removeIt("remove lab-am after a failure"),
+      acknowledged,
+    }));
   });
 
   // ---- Settings slice F §7: the AI section's Review and apply, on the

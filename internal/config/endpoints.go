@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/moomora/klyx/internal/safehttp"
+	"gopkg.in/yaml.v3"
 )
 
 // Coverage C5 §2: one endpoint shape for metrics, Alertmanager and Loki.
@@ -46,7 +48,63 @@ type EndpointConfig struct {
 	// equality matchers, sent as the endpoint's filter and checked again on
 	// what it returns. None means everything there is this cluster's.
 	Match map[string]string `yaml:"match"`
+	// Source subscribes the cluster to an installation of sources, its
+	// tenant and match over the installation's defaults; Scope "tenant"
+	// takes everything in the tenant; Off reads no alerts (Settings S3a
+	// §2.1). Alertmanager only until S3b: on Loki each is a load error.
+	Source string `yaml:"source"`
+	Scope  string `yaml:"scope"`
+	Off    bool   `yaml:"off"`
+
+	// keys are the keys the block wrote, so a key written with a zero
+	// value is told apart from one left out (Codex's review of S3a-1, R1)
+	keys []string
 }
+
+// UnmarshalYAML decodes the block and records the keys it wrote.
+func (e *EndpointConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain EndpointConfig
+	var p plain
+	if err := n.Decode(&p); err != nil {
+		return err
+	}
+	*e = EndpointConfig(p)
+	e.keys = mappingKeys(n, map[*yaml.Node]bool{})
+	return nil
+}
+
+// mappingKeys are the keys a mapping writes, its merges included: a merge
+// key's mapping, an alias to one, or a sequence of them, nested merges
+// too, each node once (Codex's re-review of S3a-1, RR1). Precedence does
+// not matter here: a key written anywhere in the merge is written.
+func mappingKeys(n *yaml.Node, seen map[*yaml.Node]bool) []string {
+	for hops := 0; n != nil && n.Kind == yaml.AliasNode && hops < 64; hops++ {
+		n = n.Alias
+	}
+	if n == nil || seen[n] {
+		return nil
+	}
+	seen[n] = true
+	var out []string
+	switch n.Kind {
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			out = append(out, mappingKeys(c, seen)...)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if k := n.Content[i]; k.ShortTag() == "!!merge" {
+				out = append(out, mappingKeys(n.Content[i+1], seen)...)
+			} else {
+				out = append(out, k.Value)
+			}
+		}
+	}
+	return out
+}
+
+// wrote reports whether the block wrote key, whatever its value.
+func (e EndpointConfig) wrote(key string) bool { return slices.Contains(e.keys, key) }
 
 // Located says the endpoint names where it is: a URL or a Service. An
 // Alertmanager or metrics block without either is discovered in the
@@ -199,7 +257,7 @@ func sharedWithoutMatch(clusters []ClusterConfig) []string {
 			if err != nil {
 				continue
 			}
-			k := key{e.Kind, origin + u.Path} // the origin canonical, the path as written
+			k := key{e.Kind, origin + u.EscapedPath()} // the origin canonical, the path as written (escaped, never decoded)
 			if _, seen := users[k]; !seen {
 				order = append(order, k)
 			}

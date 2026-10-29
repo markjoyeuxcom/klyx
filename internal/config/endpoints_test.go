@@ -170,6 +170,9 @@ func TestSharedEndpointWithoutMatchWarns(t *testing.T) {
 		{"      endpoint: https://am.example\n      match: {cluster: a}\n", "      endpoint: https://am.example\n", true},
 		{"      endpoint: https://am.example\n      match: {cluster: a}\n", "      endpoint: https://am.example\n      match: {cluster: b}\n", false},
 		{"      endpoint: https://am.example/one\n", "      endpoint: https://am.example/two\n", false},
+		// the path as written, escaped: a %2F is not a / (Codex's review of S3a-4b, R2)
+		{"      endpoint: https://am.example/a%2Fb\n", "      endpoint: https://am.example/a/b\n", false},
+		{"      endpoint: https://am.example/a/b\n", "      endpoint: https://am.example/a/b/\n", true},
 	} {
 		c, err := loadYAML(t, doc(tc.a, tc.b))
 		if err != nil {

@@ -101,6 +101,11 @@ type EndpointsService struct {
 	// entry, so a reconnect keeps it. Nil in tools and tests.
 	fleetLock func() func()
 	publish   func(cluster, kind string, m *config.MetricsConfig, e *config.EndpointConfig)
+
+	// the installations in force and their test (Settings S3a §5): an
+	// installation's credential actions
+	sources      func() *fleet.AlertSources
+	sourceStatus func(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error)
 }
 
 // WireEndpointActivation makes every endpoint activation publish into the
@@ -218,7 +223,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 	cred := endpointcred.Resolve(s.store, endpointcred.Input{Cluster: cl.Name, Kind: ne.Kind, Spec: ne.Spec, LegacyToken: legacy, Revoked: s.revs.Revoked(cl.Name, ne.Kind)})
 	r := EndpointRowDTO{Cluster: cl.Name, Kind: ne.Kind, Source: endpointSource(ne.Kind, ne.Spec), Tenant: ne.Spec.Tenant,
 		TLSOff: ne.Spec.TLSSkipVerify && ne.Spec.Endpoint != "", Scope: matchWords(ne.Spec.Match),
-		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0,
+		// only a legacy reader that filters nothing: off reads nothing, and a
+		// subscription's scope is its installation's (Codex's review of
+		// S3a-1, R3)
+		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0 && !ne.Spec.Off && ne.Spec.Source == "",
 		State:    string(cred.State), Why: cred.Why, Legacy: legacy != "", StoredToo: cred.StoredToo,
 		Revision: snap.EndpointRevision(cl.Name, ne.Kind)}
 	if a := ne.Spec.Auth; a != nil {
@@ -244,6 +252,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 // not (Settings review slice 0).
 func endpointSource(kind string, e config.EndpointConfig) string {
 	switch {
+	case e.Off:
+		return "off in fleet.yaml: no alerts are read for this cluster"
+	case e.Source != "":
+		return "subscribed to the installation " + e.Source + "; this version of Klyx does not read through installations yet"
 	case e.Endpoint != "":
 		u, err := url.Parse(e.Endpoint)
 		if err != nil {

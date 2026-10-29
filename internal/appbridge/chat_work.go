@@ -104,3 +104,45 @@ func offersAStep(p *actionPlan) bool {
 	}
 	return false
 }
+
+// AlertWork is the AI work holding alerts read on clusters (Settings S3a
+// §5), by identity: each open conversation that recorded an alerts
+// lineage there, which ends at its next send once an Observability Apply
+// moves the terms its alerts were read under, and its offered plan, which
+// is withdrawn then (§4.3).
+func (s *ChatService) AlertWork(clusters []string) []PlanWorkDTO {
+	in := map[string]bool{}
+	for _, c := range clusters {
+		in[c] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []PlanWorkDTO{}
+	for _, c := range s.convs {
+		if c.ended != "" || len(c.lineages) == 0 || !in[c.cluster] {
+			continue
+		}
+		started := ""
+		if !c.started.IsZero() {
+			started = c.started.UTC().Format(time.RFC3339)
+		}
+		what := "a chat on " + c.cluster
+		if c.kind == kindInvestigation {
+			what = "an investigation on " + c.cluster
+		}
+		out = append(out, PlanWorkDTO{ID: "conv:" + c.id, Kind: c.kind, Cluster: c.cluster, Started: started, What: what + " holding alerts read under the old terms: it ends at its next send"})
+		for i := len(c.exchanges) - 1; i >= 0; i-- {
+			e := c.exchanges[i]
+			if e.plan == nil || len(e.plan.dto.Steps) == 0 {
+				continue
+			}
+			if p := e.plan; p.withdrawn == "" && !p.declined && p.settled && offersAStep(p) {
+				out = append(out, PlanWorkDTO{ID: "offer:" + c.id + ":" + e.id, Kind: "offer", Cluster: c.cluster, What: "an action plan offered on " + c.cluster + ": it is withdrawn"})
+			}
+			break
+		}
+	}
+	out = append(out, explainAlertWork(in)...)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}

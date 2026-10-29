@@ -13,6 +13,7 @@ import { getZoom } from "../../app/zoom";
 import { SettingField } from "../SettingField";
 import { ENTRIES } from "../registry";
 import { Group, bytes, plural, type SectionProps } from "./common";
+import { SourcesPanel } from "./SourcesPanel";
 import { isStorageKey, readStored } from "../storage";
 
 // The sections that hold the existing panels (S1 §1), each with its
@@ -58,17 +59,29 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
   const parts = useAlertParts();
   const partsKey = parts.map((p) => `${p.cluster}:${p.coverage}`).join(",");
   const last = useRef<EndpointsState | null>(null);
+  // where alerts come from (S3a §8) is the section's sentence once read
+  const sources = useRef<string | null>(null);
   const onLoaded = (s: EndpointsState) => {
     last.current = s;
-    say(observabilitySentence(s, parts));
-    ready();
+    say(sources.current ?? observabilitySentence(s, parts));
+  };
+  // the section is ready, and an anchor applied, once both panels have
+  // read, or failed to: an installation's row must exist before its anchor
+  // is judged gone (Codex's review of S3a-4c, R6)
+  const settled = useRef({ endpoints: false, sources: false });
+  const settle = (which: "endpoints" | "sources") => {
+    settled.current[which] = true;
+    if (settled.current.endpoints && settled.current.sources) ready();
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (last.current) say(observabilitySentence(last.current, parts)); }, [partsKey]);
+  useEffect(() => { if (last.current && !sources.current) say(observabilitySentence(last.current, parts)); }, [partsKey]);
   return (
     <>
+      <Group title="Alert sources">
+        <SourcesPanel onLoaded={(s) => { sources.current = s.sentence; say(s.sentence); }} onSettled={() => settle("sources")} />
+      </Group>
       <Group title="External endpoints">
-        <EndpointsPanel onLoaded={onLoaded} />
+        <EndpointsPanel onLoaded={onLoaded} onSettled={() => settle("endpoints")} />
       </Group>
       <Group title="Endpoint fields">
         <p className="settings-group-note">What each field of a cluster&apos;s metrics, alertmanager and loki block does. They are set in fleet.yaml in this version.</p>
@@ -77,7 +90,25 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
         <EndpointFields kind="loki" title="Loki" />
         <SettingField id="clusters[].metrics.token" source="file" value="per cluster: External endpoints says where each token is" />
       </Group>
+      <Group title="Installations">
+        <p className="settings-group-note">
+          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. Klyx reads it once for its members and gives each its share. Alert sources above adds, edits and removes them through Review and apply.
+        </p>
+        <InstallationFields />
+      </Group>
     </>
+  );
+}
+
+// The fields of an installation (Settings S3a §2.1), described once.
+function InstallationFields() {
+  const ids = ENTRIES.filter((e) => e.id.startsWith("sources[].")).map((e) => e.id);
+  return (
+    <details className="settings-fields" data-fields="sources">
+      <summary>What each installation field does</summary>
+      {ids.map((id) => <SettingField key={id} id={id} source="file" value="per installation, in fleet.yaml" />)}
+      <SettingField id="credential.source" value="per installation read at an endpoint with auth, in the keychain" />
+    </details>
   );
 }
 

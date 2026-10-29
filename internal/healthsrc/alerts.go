@@ -40,6 +40,10 @@ const (
 type AlertsDeps struct {
 	Cluster string
 	Read    func(ctx context.Context, key string) (alertmanager.Read, error)
+	// ReadAt, when set, is Read with the time the alerts were acquired: a
+	// share of an installation's read keeps that read's time (Settings S3a
+	// §3.2)
+	ReadAt func(ctx context.Context, key string) (alertmanager.Read, time.Time, error)
 }
 
 // subjectKinds are the held kinds an alert's subject can be looked up in.
@@ -58,6 +62,15 @@ func Alerts(d AlertsDeps) ([]observe.SnapshotSpec, []observe.DomainSpec) {
 			}
 			return []any{r}, r.Truncated, nil
 		}}
+	if d.ReadAt != nil {
+		snap.ReadKeyed, snap.ReadKeyedAt = nil, func(ctx context.Context, key string) ([]any, bool, time.Time, error) {
+			r, at, err := d.ReadAt(ctx, key)
+			if err != nil {
+				return nil, false, time.Time{}, err
+			}
+			return []any{r}, r.Truncated, at, nil
+		}
+	}
 	domains := []observe.DomainSpec{{ID: TaskAlerts, Parts: []observe.PartSpec{{
 		ID: "alerts", Entity: "Alertmanager alerts", Scope: "this cluster's alerts", Classifier: "alerts",
 		Counted:  []string{SnapAlerts},
@@ -75,6 +88,9 @@ type AlertRows struct {
 	Match     map[string]string
 	Truncated bool
 	Alerts    []AlertRow
+	// Lineage is the read's provenance (Settings S3a §3.4): an AI read of
+	// these rows records it, and every later send checks it
+	Lineage alertmanager.Lineage
 }
 
 // AlertRow is one alert's display values and its subject's state.
@@ -185,7 +201,7 @@ func evalAlerts(cluster string, c observe.Capture) observe.PartResult {
 	counts.Truncated = env.Truncated
 	idx := indexSubjects(c)
 	var counted []alertmanager.Item
-	rows := AlertRows{Identity: env.Identity, Source: env.Source, Match: env.Match, Truncated: env.Truncated}
+	rows := AlertRows{Identity: env.Identity, Source: env.Source, Match: env.Match, Truncated: env.Truncated, Lineage: env.Lineage}
 	for _, it := range env.Alerts {
 		switch it.Display.StateClass {
 		case alertmanager.StateActive:

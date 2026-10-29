@@ -82,8 +82,35 @@ type Read struct {
 	Match     map[string]string // a display value (DisplayMatch)
 	Alerts    []Item
 	Truncated bool
+	// Lineage is where the alerts came from (Settings S3a §3.4): what a
+	// later send of them is checked against.
+	Lineage Lineage
 	// No read time: the snapshot's freshness (its coverage's AsOf) is the
 	// read's time, so an unchanged read is an unchanged item.
+}
+
+// Lineage is a read's provenance (Settings S3a §3.4): identities and
+// counters only, never data, so it can travel with what the read informed
+// and be checked before a later send. Every field is fixed at the read;
+// it is never looked up again.
+type Lineage struct {
+	// Mode is how the cluster resolved: subscribed, direct, service or
+	// discovered (legacy), or off
+	Mode string `json:"mode"`
+	// Identity is the source identity the read was keyed to
+	Identity string `json:"identity"`
+	// the installation and the member's subscription, when subscribed
+	Installation string `json:"installation,omitempty"`
+	InstRev      uint64 `json:"instRev,omitempty"`
+	SubRev       uint64 `json:"subRev,omitempty"`
+	// the host, its connection and its access generation, when hosted;
+	// Access alone for a direct installation
+	Host     string `json:"host,omitempty"`
+	HostConn uint64 `json:"hostConn,omitempty"`
+	Access   string `json:"access,omitempty"`
+	Tenant   string `json:"tenant,omitempty"`
+	// CredRev is the endpoint credential's revision the read used
+	CredRev uint64 `json:"credRev,omitempty"`
 }
 
 // Item is one alert of a read.

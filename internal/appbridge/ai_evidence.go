@@ -555,6 +555,10 @@ func alertEvidence(ctx context.Context, conn AIConn, t alertTarget, sc *scrubber
 	if !ok {
 		return nil, ""
 	}
+	if recordLineage(ctx, r.Lineage) != nil {
+		// read under terms that have since moved (S3a §4.3): never sent
+		return nil, ""
+	}
 	seen, stale := alertsSeenAt(rows.Part)
 	var out []evidenceAlert
 	byName := false
