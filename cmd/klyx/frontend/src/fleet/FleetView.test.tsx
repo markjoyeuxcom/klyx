@@ -144,7 +144,10 @@ describe("the fleet screen (slice 5a)", () => {
 });
 
 describe("the aside and footer (slice 5c)", () => {
-  const days = (n: number) => Math.floor(Date.now() / 1000) + n * 86400;
+  // half a day past n whole days: the Horizon floors (notAfter - now) to
+  // days, and its now is read at render, so a fixture on the exact boundary
+  // read a second later fell a day short
+  const days = (n: number) => Math.floor(Date.now() / 1000) + n * 86400 + 43200;
 
   it("the footer counts connections only, never 'live'", () => {
     useFleet.setState({ clusters: [c("a"), c("b", "Degraded"), c("x", "Failed"), c("n", "Connecting"), c("s", "Stale")] });

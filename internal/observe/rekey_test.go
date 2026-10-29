@@ -84,6 +84,10 @@ func TestSourceAbsentIsAbsentNeverAGap(t *testing.T) {
 // A, and B succeeding empty is live and empty. Read receives the key.
 func TestRekeyStartsAnUnreadCollection(t *testing.T) {
 	src := newKeyed()
+	// The initial generation reads one item, so "A read empty" holds only on
+	// A's own read: an empty "" result published before the re-key would
+	// pass it with A's read not yet made, and B's could then be read first.
+	src.set("", SnapshotRead{Items: []any{"x"}})
 	src.set("A", SnapshotRead{}) // an empty success
 	h := keyedHarness(t, src)
 	<-src.entered // the initial generation's read ("")
