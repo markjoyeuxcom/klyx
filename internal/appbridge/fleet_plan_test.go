@@ -341,8 +341,10 @@ func TestAReconnectIsHeldUntilItsOwnConnectionIsUsable(t *testing.T) {
 		t.Fatalf("file:\n%s", r.file())
 	}
 	go r.life.Run(r.ctx)
-	if !waitUntil(t, 5*time.Second, func() bool { return r.snap("dev").State == policy.Active }) {
-		t.Fatal("never released")
+	// Active is published before the OnReleased callback runs, outside the
+	// gate, so both are awaited; then it was released exactly once
+	if !waitUntil(t, 5*time.Second, func() bool { return r.snap("dev").State == policy.Active && r.released() > 0 }) {
+		t.Fatalf("never released: %+v, released %d times", r.snap("dev"), r.released())
 	}
 	if n := r.released(); n != 1 {
 		t.Fatalf("released %d times", n)
