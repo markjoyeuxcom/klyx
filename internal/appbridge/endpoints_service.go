@@ -106,6 +106,7 @@ type EndpointsService struct {
 	// installation's credential actions
 	sources      func() *fleet.AlertSources
 	sourceStatus func(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error)
+	sourceProbe  func(ctx context.Context, id string, revision uint64) (words, where string, err error)
 }
 
 // WireEndpointActivation makes every endpoint activation publish into the
@@ -226,7 +227,7 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 		// only a legacy reader that filters nothing: off reads nothing, and a
 		// subscription's scope is its installation's (Codex's review of
 		// S3a-1, R3)
-		Unscoped: ne.Kind != config.EndpointMetrics && len(ne.Spec.Match) == 0 && !ne.Spec.Off && ne.Spec.Source == "",
+		Unscoped: len(ne.Spec.Match) == 0 && !ne.Spec.Off && ne.Spec.Source == "",
 		State:    string(cred.State), Why: cred.Why, Legacy: legacy != "", StoredToo: cred.StoredToo,
 		Revision: snap.EndpointRevision(cl.Name, ne.Kind)}
 	if a := ne.Spec.Auth; a != nil {
@@ -253,7 +254,10 @@ func (s *EndpointsService) row(snap config.Snapshot, cl config.ClusterConfig, ne
 func endpointSource(kind string, e config.EndpointConfig) string {
 	switch {
 	case e.Off:
-		return "off in fleet.yaml: no alerts are read for this cluster"
+		if kind == config.EndpointLoki {
+			return "off in fleet.yaml: no log history is read for this cluster"
+		}
+		return "off in fleet.yaml: no " + kindWords(kind) + " are read for this cluster"
 	case e.Source != "":
 		return "subscribed to the installation " + e.Source + "; this version of Klyx does not read through installations yet"
 	case e.Endpoint != "":

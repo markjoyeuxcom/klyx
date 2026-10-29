@@ -18,6 +18,13 @@ type UsageStatus struct {
 	Available bool
 	Message   string
 	UpdatedAt time.Time
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source (Settings S3b §3.2, §3.4)
+	Sentence string
+	Lineage  string
+	// NoData says the read answered with no series under the cluster's
+	// scope (S3b §3.3), apart from Message's caveats
+	NoData string
 }
 
 // Key is the stable workload identity "<Kind>/<Namespace>/<Name>" shared by the

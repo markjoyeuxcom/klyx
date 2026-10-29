@@ -81,6 +81,12 @@ func (t *chatTools) logHistory(ctx context.Context, ns, pod, uid, container, win
 	if page.Error != "" {
 		return t.failed(toolLogHistory, "loki", target, errors.New(page.Error))
 	}
+	// the conversation keeps the reader's lineage (Settings S3b §4)
+	if t.record != nil {
+		if err := t.record(page.Lineage); err != nil {
+			return t.failed(toolLogHistory, "loki", target, err)
+		}
+	}
 	data := chatLogHistoryData{Window: window, Start: page.Start, End: page.End}
 	if page.Mode == "uid" {
 		data.Identity = "by the pod's UID " + uid

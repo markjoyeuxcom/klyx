@@ -5,11 +5,18 @@ import { WorkloadsService } from "../../bindings/github.com/moomora/klyx/interna
 // the rows at render (a rows push never erases it). Stale-guarded on
 // cluster+namespace by setWorkloadUsage. Failures are swallowed (the store
 // keeps last-good usage and marks stale).
+// A reply applies only when no later request was made: an earlier read's
+// late reply never replaces a newer one (Settings S3b §3.2).
+let gen = 0;
+
 export async function getWorkloadMetrics(cluster: string, namespace: string): Promise<void> {
+  const g = ++gen;
+  let r: WorkloadMetricsResultDTO;
   try {
-    const r = (await WorkloadsService.GetWorkloadMetrics(cluster, namespace)) as WorkloadMetricsResultDTO;
-    useFleet.getState().setWorkloadUsage(cluster, namespace, r ?? { status: { available: false, message: "", updatedAt: "" }, usage: {} });
+    r = ((await WorkloadsService.GetWorkloadMetrics(cluster, namespace)) as WorkloadMetricsResultDTO) ?? { status: { available: false, message: "", updatedAt: "" }, usage: {} };
   } catch {
-    useFleet.getState().setWorkloadUsage(cluster, namespace, { status: { available: false, message: "metrics request failed", updatedAt: "" }, usage: {} });
+    r = { status: { available: false, message: "metrics request failed", updatedAt: "" }, usage: {} };
   }
+  if (g !== gen) return;
+  useFleet.getState().setWorkloadUsage(cluster, namespace, r);
 }

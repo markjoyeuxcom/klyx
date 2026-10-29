@@ -32,19 +32,27 @@ type matrixElem struct {
 // aggregate with sum()/avg() so the matrix has 0 or 1 elements). An empty
 // matrix returns an empty slice and nil error; >1 series is an error.
 // Non-finite (NaN/Inf) points are skipped, leaving a gap.
-func (c *Client) RangeSeries(ctx context.Context, promql string, start, end time.Time, step time.Duration) (pts []Point, err error) {
+func (c *Client) RangeSeries(ctx context.Context, q Query, start, end time.Time, step time.Duration) (pts []Point, err error) {
+	pts, _, err = c.RangeSeriesSeen(ctx, q, start, end, step)
+	return pts, err
+}
+
+// RangeSeriesSeen is RangeSeries with the number of series the matrix held
+// (0 or 1): zero is an answer with no series, told apart from one series
+// whose points were all gaps (Settings S3b §3.3).
+func (c *Client) RangeSeriesSeen(ctx context.Context, q Query, start, end time.Time, step time.Duration) (pts []Point, n int, err error) {
 	defer func() { err = c.redact(err) }()
-	series, err := c.RangeMatrix(ctx, promql, start, end, step)
+	series, err := c.RangeMatrix(ctx, q, start, end, step)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(series) == 0 {
-		return []Point{}, nil
+		return []Point{}, 0, nil
 	}
 	if len(series) > 1 {
-		return nil, fmt.Errorf("expected single series, got %d (aggregate the query)", len(series))
+		return nil, 0, fmt.Errorf("expected single series, got %d (aggregate the query)", len(series))
 	}
-	return series[0].Points, nil
+	return series[0].Points, 1, nil
 }
 
 // LabeledSeries is one element of a range query's matrix: its labels and its
@@ -57,8 +65,12 @@ type LabeledSeries struct {
 // RangeMatrix runs a range query and returns every series with its labels.
 // Non-finite points are skipped, leaving a gap. An empty matrix returns an
 // empty slice and nil error.
-func (c *Client) RangeMatrix(ctx context.Context, promql string, start, end time.Time, step time.Duration) (res []LabeledSeries, err error) {
+func (c *Client) RangeMatrix(ctx context.Context, q Query, start, end time.Time, step time.Duration) (res []LabeledSeries, err error) {
 	defer func() { err = c.redact(err) }()
+	promql, err := q.text(c.scope)
+	if err != nil {
+		return nil, err
+	}
 	rq, ok := c.q.(RangeQuerier)
 	if !ok {
 		return nil, fmt.Errorf("transport does not support range queries")

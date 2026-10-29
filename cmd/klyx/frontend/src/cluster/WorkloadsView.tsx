@@ -47,6 +47,7 @@ import { useClusterKey } from "./useClusterKey";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
+import { chartSentence, SourceLine, sourceText } from "./SourceLine";
 const KINDS: WorkloadKind[] = ["Deployment", "StatefulSet", "DaemonSet"];
 const kindShort: Record<WorkloadKind, string> = { Deployment: "deploy", StatefulSet: "sts", DaemonSet: "daemonset" };
 const keyOf = (w: WorkloadDTO) => `${w.kind}/${w.namespace}/${w.name}`;
@@ -402,6 +403,9 @@ export function WorkloadsView({ cluster }: { cluster: string }) {
     );
   }
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{wl.rowsState?.refreshError ? ` Last re-read failed: ${wl.rowsState.refreshError}` : ""}</div>);
+  // where the usage comes from (Settings S3b §3.4); usage kept from an
+  // earlier read keeps that read's sentence, said as not current
+  if (mine && (wl.metricsAvailable || wl.metricsStatus?.noData)) notices.push(<SourceLine key="src" sentence={wl.metricsStatus?.sentence} noData={wl.metricsStatus?.noData} stale={wl.metricsStale} testid="workloads-source" />);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
 
   const tone = attentionTone(counts);
@@ -880,6 +884,9 @@ function WorkloadInspector({
 // loading and a muted reason when the series are unavailable.
 function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string; kind: string; namespace: string; name: string }) {
   const [spark, setSpark] = useState<SparklinesDTO | null>(null);
+  // the lens's usage readout, when it reads this cluster: the charts say
+  // their own source where it is not that readout's (Settings S3b §3.2)
+  const readout = useFleet((s) => (s.workloads.cluster === cluster && s.workloads.metricsAvailable ? s.workloads.metricsStatus : null));
 
   useEffect(() => {
     let cancelled = false;
@@ -890,6 +897,7 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
   }, [cluster, namespace, kind, name]);
 
   if (spark === null) return null;
+  const own = chartSentence(spark, readout ?? null);
   if (!spark.available) {
     return (
       <div style={{ padding: "0 8px 6px 32px", background: "var(--color-background-secondary)", fontSize: 10, color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
@@ -908,6 +916,9 @@ function WorkloadSparkRow({ cluster, kind, namespace, name }: { cluster: string;
         <span style={{ color: "var(--color-text-tertiary)" }}>mem 30m</span>
         <Sparkline points={spark.mem} />
       </span>
+      {/* no series under the cluster's scope, said rather than drawn as nothing (Settings S3b §3.3) */}
+      {spark.noData && <span data-testid="spark-no-data" style={{ color: "var(--color-text-tertiary)" }}>{spark.noData}</span>}
+      {own.sentence && <span data-testid="spark-source" style={{ color: "var(--color-text-tertiary)" }}>{sourceText(own.sentence, own.stale)}</span>}
     </div>
   );
 }

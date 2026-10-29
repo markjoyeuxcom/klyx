@@ -253,6 +253,22 @@ See `docs/history/brainstorm-questions.md` (Q16 pinned resources, etc.).
 
 Merged to `main` — do not re-add to the backlog:
 
+**2026-10-29 - Settings S3a and S3b (untagged; specs
+`docs/superpowers/specs/2026-10-27-klyx-settings-s3a.md` and
+`2026-10-28-klyx-settings-s3b.md`):**
+- S3a, Alertmanager installations and subscriptions: the model, reading
+  in buckets with the split, the scope sentence, the host fence on reads
+  and later sends, plans and an installation's credential, Detect and the
+  migration offer, the page. Every stage Codex-accepted (§37); #60
+- S3b, Loki and metrics on the same model: S3b-1 (the model), 2a (the
+  closed metrics query surface) and 2b (reading through installations)
+  Codex-accepted; 2c's revision 1 (the views), 3 (the AI's fences) and 4a
+  to 4c (plans, credentials and Test, Detect for metrics, Settings >
+  Sources) merged before review at the owner's request (§39) - those
+  reviews are owed, in that order; #62
+- The native smoke's labs and walk in `scripts/lab/smoke`, the local gates
+  and mutation runner in `scripts/dev`, and four test flakes fixed; #61
+
 **2026-10-27 - Settings S2b and S2c (untagged; spec
 `docs/superpowers/specs/2026-10-26-klyx-settings-s2.md` §20-§28):**
 - S2b: the cluster entry writers (only the changed fields, every other

@@ -23,7 +23,7 @@ func TestDirectTransport(t *testing.T) {
 	defer srv.Close()
 
 	tr := NewDirectTransport(srv.URL, "tok", srv.Client())
-	status, body, err := tr.InstantQuery(context.Background(), "vector(1)")
+	status, body, err := tr.q.InstantQuery(context.Background(), "vector(1)")
 	if err != nil || status != 200 {
 		t.Fatalf("status=%d err=%v", status, err)
 	}
@@ -66,7 +66,7 @@ func TestProxyTransportPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := NewProxyTransport(rc, ServiceCandidate{Namespace: "monitoring", Name: "prometheus-operated", Port: "9090", Scheme: "http"})
-	_, _, _ = tr.InstantQuery(context.Background(), "vector(1)")
+	_, _, _ = tr.q.InstantQuery(context.Background(), "vector(1)")
 	want := "/api/v1/namespaces/monitoring/services/http:prometheus-operated:9090/proxy/api/v1/query"
 	if rt.url != want {
 		t.Fatalf("proxy path:\n got %s\nwant %s", rt.url, want)

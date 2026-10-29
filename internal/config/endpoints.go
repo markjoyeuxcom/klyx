@@ -50,8 +50,8 @@ type EndpointConfig struct {
 	Match map[string]string `yaml:"match"`
 	// Source subscribes the cluster to an installation of sources, its
 	// tenant and match over the installation's defaults; Scope "tenant"
-	// takes everything in the tenant; Off reads no alerts (Settings S3a
-	// §2.1). Alertmanager only until S3b: on Loki each is a load error.
+	// takes everything in the tenant; Off reads nothing (Settings S3a
+	// §2.1, S3b §2.1).
 	Source string `yaml:"source"`
 	Scope  string `yaml:"scope"`
 	Off    bool   `yaml:"off"`
@@ -103,6 +103,19 @@ func mappingKeys(n *yaml.Node, seen map[*yaml.Node]bool) []string {
 	return out
 }
 
+// UnmarshalYAML decodes a metrics block and records the keys it wrote
+// (Settings S3b §2.1), as EndpointConfig's does.
+func (m *MetricsConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain MetricsConfig
+	var p plain
+	if err := n.Decode(&p); err != nil {
+		return err
+	}
+	*m = MetricsConfig(p)
+	m.keys = mappingKeys(n, map[*yaml.Node]bool{})
+	return nil
+}
+
 // wrote reports whether the block wrote key, whatever its value.
 func (e EndpointConfig) wrote(key string) bool { return slices.Contains(e.keys, key) }
 
@@ -112,9 +125,11 @@ func (e EndpointConfig) wrote(key string) bool { return slices.Contains(e.keys, 
 // review slice 0).
 func (e EndpointConfig) Located() bool { return e.Endpoint != "" || e.ServiceRef != nil }
 
-// Spec is the metrics endpoint in the shared shape.
+// Spec is the metrics endpoint in the shared shape, its subscription
+// fields and written keys included (Settings S3b §2.1).
 func (m MetricsConfig) Spec() EndpointConfig {
-	return EndpointConfig{Endpoint: m.Endpoint, TLSSkipVerify: m.TLSSkipVerify, ServiceRef: m.ServiceRef, Auth: m.Auth, Tenant: m.Tenant}
+	return EndpointConfig{Endpoint: m.Endpoint, TLSSkipVerify: m.TLSSkipVerify, ServiceRef: m.ServiceRef, Auth: m.Auth, Tenant: m.Tenant,
+		Match: m.Match, Source: m.Source, Scope: m.Scope, Off: m.Off, keys: m.keys}
 }
 
 // Endpoints are a cluster's configured endpoints by kind, in a fixed order.
@@ -156,6 +171,23 @@ func EndpointURLProblem(endpoint string) string {
 		return "the endpoint URL carries credentials; set them in Settings > Observability"
 	}
 	return ""
+}
+
+// reservedMetricsLabel is a label of a metrics scope that Prometheus
+// reserves - a "__" prefix, __name__ among them - in label order; "" when
+// none (Codex's review of S3b-2a, R3).
+func reservedMetricsLabel(match map[string]string) string {
+	names := make([]string, 0, len(match))
+	for k := range match {
+		if strings.HasPrefix(k, "__") {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }
 
 // labelName is a label name Klyx can send as an equality matcher.
@@ -230,15 +262,17 @@ func endpointWarnings(cluster, prefix string, e EndpointConfig) []string {
 	if p := EndpointURLProblem(e.Endpoint); p != "" {
 		w = append(w, fmt.Sprintf("cluster %q: %s: %s", cluster, prefix, p))
 	}
-	if prefix == EndpointLoki && !e.Located() {
+	// a subscription or off says where its logs come from (S3b §2.1)
+	if prefix == EndpointLoki && !e.Located() && e.Source == "" && !e.Off {
 		w = append(w, fmt.Sprintf("cluster %q: loki has no endpoint or serviceRef: Klyx does not discover Loki, so it reads no log history for this cluster", cluster))
 	}
 	return w
 }
 
-// sharedWithoutMatch warns when two clusters read the same Alertmanager or
-// Loki endpoint and one of them has no match (coverage S8a §2): without
-// match, every alert or stream there is read as that cluster's own.
+// sharedWithoutMatch warns when two clusters read the same Alertmanager,
+// Loki or metrics endpoint and one of them has no match (coverage S8a §2;
+// Settings S3b §2.1): without match, every alert, stream or series there is
+// read as that cluster's own.
 func sharedWithoutMatch(clusters []ClusterConfig) []string {
 	type key struct{ kind, at string }
 	users := map[key][]string{}
@@ -246,7 +280,7 @@ func sharedWithoutMatch(clusters []ClusterConfig) []string {
 	var order []key
 	for _, cl := range clusters {
 		for _, e := range cl.Endpoints() {
-			if e.Kind == EndpointMetrics || e.Spec.Endpoint == "" || EndpointURLProblem(e.Spec.Endpoint) != "" {
+			if e.Spec.Endpoint == "" || EndpointURLProblem(e.Spec.Endpoint) != "" {
 				continue
 			}
 			u, err := url.Parse(strings.TrimRight(e.Spec.Endpoint, "/"))

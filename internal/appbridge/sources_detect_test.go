@@ -99,12 +99,12 @@ func TestMigrationOffers(t *testing.T) {
 		SetRunningEndpoint(r.cs, cluster, config.EndpointAlertmanager, nil, b)
 	}
 	legacy("prd", &config.EndpointConfig{Endpoint: "https://AM.example:443/am/", Tenant: "ops", Auth: &config.EndpointAuth{Type: "bearer"}, Match: map[string]string{"cluster": "prd"}})
-	if offers := r.svc.MigrationOffers(); len(offers) != 0 {
+	if offers := r.svc.MigrationOffers(""); len(offers) != 0 {
 		t.Fatalf("a URL on one cluster offered: %+v", offers)
 	}
 	legacy("dev", &config.EndpointConfig{Endpoint: "https://am.example/am", Tenant: "ops", Auth: &config.EndpointAuth{Type: "basic", Username: "klyx"}})
 	before, revBefore := r.file(), r.active.Revision()
-	offers := r.svc.MigrationOffers()
+	offers := r.svc.MigrationOffers("")
 	if len(offers) != 1 || strings.Join(offers[0].Clusters, ",") != "prd,dev" {
 		t.Fatalf("%+v", offers)
 	}
@@ -129,7 +129,7 @@ func TestMigrationOffers(t *testing.T) {
 	if err := r.store.Set(endpointcred.Account("dev", config.EndpointAlertmanager), "a record"); err != nil {
 		t.Fatal(err)
 	}
-	o = r.svc.MigrationOffers()[0]
+	o = r.svc.MigrationOffers("")[0]
 	if len(o.Conflicts) != 0 || len(o.Choices) != 0 || o.Scopes[0].Change != "the same" || o.Scopes[1].After != "from am-am at https://am.example:443, tenant dev-t, filtered by cluster=dev" ||
 		o.Draft.Installation.Source.Tenant != "" {
 		t.Fatalf("%+v", o)
@@ -150,7 +150,7 @@ func TestMigrationOffers(t *testing.T) {
 	// a Service shared by name is never offered
 	legacy("prd", &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "m", Name: "am", Port: "web"}})
 	legacy("dev", &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "m", Name: "am", Port: "web"}})
-	if offers := r.svc.MigrationOffers(); len(offers) != 0 {
+	if offers := r.svc.MigrationOffers(""); len(offers) != 0 {
 		t.Fatalf("equal Service names offered: %+v", offers)
 	}
 }
@@ -162,7 +162,7 @@ func TestAMigrationOfferNamesTheChoiceOnASharedTenant(t *testing.T) {
 	for _, c := range []string{"prd", "dev"} {
 		SetRunningEndpoint(r.cs, c, config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: "https://am.example/am", Tenant: "ops", Match: map[string]string{"cluster": c}})
 	}
-	o := r.svc.MigrationOffers()[0]
+	o := r.svc.MigrationOffers("")[0]
 	if len(o.Choices) != 1 || !strings.Contains(o.Choices[0], "memberLabel") || o.Scopes[0].After != "not valid yet" {
 		t.Fatalf("%+v", o)
 	}
@@ -190,7 +190,7 @@ func TestAMigrationOfferKeepsEscapedPathsApart(t *testing.T) {
 			r := newSourcesRig(t)
 			SetRunningEndpoint(r.cs, "prd", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: tc.prd, Tenant: "prd", Match: map[string]string{"cluster": "prd"}})
 			SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: tc.dev, Tenant: "dev", Match: map[string]string{"cluster": "dev"}})
-			offers := r.svc.MigrationOffers()
+			offers := r.svc.MigrationOffers("")
 			if len(offers) != tc.offers || tc.offers == 1 && offers[0].Where != tc.where {
 				t.Fatalf("%+v", offers)
 			}
@@ -214,7 +214,7 @@ func TestAnOffersConflictsAreLeftUnresolved(t *testing.T) {
 			r := newSourcesRig(t)
 			SetRunningEndpoint(r.cs, "prd", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: "https://am.example", TLSSkipVerify: tc.prd, Match: map[string]string{"cluster": "prd"}})
 			SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{Endpoint: "https://am.example", TLSSkipVerify: tc.dev, Match: map[string]string{"cluster": "dev"}})
-			offers := r.svc.MigrationOffers()
+			offers := r.svc.MigrationOffers("")
 			if len(offers) != 1 || strings.Join(offers[0].Unresolved, ",") != tc.unresolved || len(offers[0].Conflicts) != len(offers[0].Unresolved) {
 				t.Fatalf("%+v", offers)
 			}

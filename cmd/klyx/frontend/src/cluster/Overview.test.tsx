@@ -210,6 +210,18 @@ describe("Overview metrics", () => {
     expect(container.innerHTML).not.toMatch(/color-text-success/);
   });
 
+  it("says where the readout is read, and no data under its scope", () => {
+    setMetrics({ available: true, mode: "subscribed", source: "lgtm-we-metrics", warning: "", reason: "", cpuFraction: null, memFraction: null, sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=dev", noData: "no data for dev under cluster=dev" });
+    render(<Overview c={blue} />);
+    expect(screen.getByTestId("monitoring-source").textContent).toBe("Read from lgtm-we-metrics, hosted by prd, filtered by cluster=dev · no data for dev under cluster=dev");
+  });
+
+  it("names a subscription's installation and where it is read", () => {
+    setMetrics({ available: true, mode: "subscribed", source: "lgtm-we-metrics, Service monitoring/mimir:8080 in aks-we-prd", warning: "", reason: "", cpuFraction: 0.2, memFraction: 0.3 });
+    render(<Overview c={blue} />);
+    expect(screen.getByText(/monitoring: installation · lgtm-we-metrics, Service monitoring\/mimir:8080 in aks-we-prd/)).toBeTruthy();
+  });
+
   it("renders — for null fractions", () => {
     setMetrics({ available: true, mode: "explicit-endpoint", source: "https://h", warning: "", reason: "", cpuFraction: null, memFraction: null });
     render(<Overview c={blue} />);

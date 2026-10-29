@@ -138,9 +138,9 @@ func newFleetRigWith(t *testing.T, run bool, failFirst string) *fleetRig {
 		Alertmanager: func(cc config.ClusterConfig) *config.EndpointConfig {
 			return config.ConnectionAlertmanager(r.activeSources(), cc)
 		},
+		Sources: r.activeSources,
 		ResolveSources: func(run []config.ClusterConfig) error {
-			_, err := config.ResolveAlertmanager(r.activeSources(), run)
-			return err
+			return config.ResolveAll(r.activeSources(), run)
 		},
 		Resubscribe: func(run []config.ClusterConfig) error {
 			r.mu.Lock()
@@ -369,6 +369,11 @@ func TestAReconnectIsHeldUntilItsOwnConnectionIsUsable(t *testing.T) {
 	// gate, so both are awaited; then it was released exactly once
 	if !waitUntil(t, 5*time.Second, func() bool { return r.snap("dev").State == policy.Active && r.released() > 0 }) {
 		t.Fatalf("never released: %+v, released %d times", r.snap("dev"), r.released())
+	}
+	// the release hooks run outside the gate, after the publication: wait
+	// for them too (Codex's re-review of S3b-1)
+	if !waitUntil(t, 5*time.Second, func() bool { return r.released() >= 1 }) {
+		t.Fatal("the release hook never ran")
 	}
 	if n := r.released(); n != 1 {
 		t.Fatalf("released %d times", n)

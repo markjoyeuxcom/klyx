@@ -88,7 +88,7 @@ func (s *GatewayService) GetHubbleFlowStats(cluster string) HubbleStatsDTO {
 		DNSErrorRate: stats.DNSErrorRate, DNSTotalRate: stats.DNSTotalRate,
 		HTTPErrorRate: stats.HTTPErrorRate, HTTPTotalRate: stats.HTTPTotalRate,
 		DropReasons: []ReasonRateDTO{},
-		Status:      RouteMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt},
+		Status:      RouteMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt, Sentence: st.Sentence, Lineage: st.Lineage},
 	}
 	for _, r := range stats.DropReasons {
 		dto.DropReasons = append(dto.DropReasons, ReasonRateDTO{Reason: r.Reason, Protocol: r.Protocol, Rate: r.Rate})
@@ -115,7 +115,7 @@ func (s *GatewayService) GetRouteMetrics(cluster string, routeKeys []string) Rou
 		updatedAt = st.UpdatedAt.Format(time.RFC3339)
 	}
 	return RouteMetricsResultDTO{
-		Status: RouteMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt},
+		Status: RouteMetricsStatusDTO{Available: st.Available, Message: st.Message, UpdatedAt: updatedAt, Sentence: st.Sentence, Lineage: st.Lineage},
 		Routes: routes,
 	}
 }

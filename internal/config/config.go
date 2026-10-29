@@ -143,6 +143,17 @@ type MetricsConfig struct {
 	ServiceRef    *MetricsServiceRef `yaml:"serviceRef"`
 	Auth          *EndpointAuth      `yaml:"auth"`   // C5 §2: the secret is in the keychain
 	Tenant        string             `yaml:"tenant"` // C5 §2: X-Scope-OrgID
+	// Match scopes every query to this cluster's series in a shared tenant;
+	// Source subscribes the cluster to a metrics installation of sources,
+	// Scope "tenant" takes everything in its tenant, Off reads no metrics
+	// (Settings S3b §2.1, §3.3).
+	Match  map[string]string `yaml:"match"`
+	Source string            `yaml:"source"`
+	Scope  string            `yaml:"scope"`
+	Off    bool              `yaml:"off"`
+
+	// keys are the keys the block wrote (as EndpointConfig's)
+	keys []string
 }
 
 type MetricsServiceRef struct {
@@ -441,26 +452,31 @@ func (c *Config) validate() error {
 			return fmt.Errorf("cluster[%d]: name is required", i)
 		}
 		if seen[cl.Name] {
-			return fmt.Errorf("duplicate cluster name %q", cl.Name)
+			return fmt.Errorf("duplicate cluster name %s", describeValue(cl.Name))
 		}
 		seen[cl.Name] = true
 		if m := cl.Metrics; m != nil {
 			if m.Endpoint != "" {
 				endpoint := strings.TrimRight(m.Endpoint, "/")
 				if strings.HasSuffix(endpoint, "/api/v1") {
-					return fmt.Errorf("cluster %q: metrics.endpoint must be the Prometheus base URL without a trailing /api/v1", cl.Name)
+					return fmt.Errorf("cluster %s: metrics.endpoint must be the Prometheus base URL without a trailing /api/v1", describeValue(cl.Name))
 				}
 			}
 		}
 		for _, e := range cl.Endpoints() {
-			if e.Kind != EndpointMetrics {
-				spec := e.Spec
-				if err := validateSubscription(cl.Name, e.Kind, &spec); err != nil {
-					return err
-				}
+			spec := e.Spec
+			if err := validateSubscription(cl.Name, e.Kind, &spec, e.LegacyToken); err != nil {
+				return err
 			}
 			if err := validateEndpoint(e.Kind, e.Spec, e.LegacyToken); err != nil {
-				return fmt.Errorf("cluster %q: %w", cl.Name, err)
+				return fmt.Errorf("cluster %s: %w", describeValue(cl.Name), err)
+			}
+			// a long name is withheld, as every diagnostic of the file's
+			// values (Codex's re-review of S3b-2a, RR3)
+			if e.Kind == EndpointMetrics {
+				if k := reservedMetricsLabel(e.Spec.Match); k != "" {
+					return fmt.Errorf("cluster %s: metrics.match: %s is reserved by Prometheus: a scope matches series by their labels, and each query names its own metric", describeValue(cl.Name), describeKey(k))
+				}
 			}
 		}
 	}
@@ -469,8 +485,5 @@ func (c *Config) validate() error {
 	if err := c.validateSources(); err != nil {
 		return err
 	}
-	if _, err := ResolveAlertmanager(c.Sources, c.Clusters); err != nil {
-		return err
-	}
-	return nil
+	return ResolveAll(c.Sources, c.Clusters)
 }

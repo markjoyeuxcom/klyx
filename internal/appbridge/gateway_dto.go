@@ -312,6 +312,11 @@ type RouteMetricsStatusDTO struct {
 	Available bool   `json:"available"`
 	Message   string `json:"message"`
 	UpdatedAt string `json:"updatedAt"` // RFC3339; "" when never succeeded
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source, so a view refuses a late reply
+	// read under another (Settings S3b §3.2, §3.4)
+	Sentence string `json:"sentence,omitempty"`
+	Lineage  string `json:"lineage,omitempty"`
 }
 
 type RouteMetricsResultDTO struct {

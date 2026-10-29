@@ -89,8 +89,12 @@ func (q *scriptedQ) InstantQuery(_ context.Context, promql string) (int, []byte,
 
 type fakeTF struct{ q metrics.Querier }
 
-func (f fakeTF) Direct(_ string, _ metrics.Auth, _ bool) metrics.Querier    { return f.q }
-func (f fakeTF) Proxy(_ metrics.ServiceCandidate, _ string) metrics.Querier { return f.q }
+func (f fakeTF) Direct(_ string, _ metrics.Auth, _ bool) metrics.Transport {
+	return metrics.TransportOf(f.q)
+}
+func (f fakeTF) Proxy(_ metrics.ServiceCandidate, _ string) metrics.Transport {
+	return metrics.TransportOf(f.q)
+}
 
 // connWithTF builds a ClusterConn whose metrics resolve to the scripted querier
 // via an explicit endpoint (skips discovery), using a fake clock.

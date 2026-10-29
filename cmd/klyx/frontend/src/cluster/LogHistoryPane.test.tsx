@@ -37,6 +37,13 @@ describe("LogHistoryPane (coverage S8b §7)", () => {
     expect(screen.getByTestId("history-start").textContent).toContain("Start of the range reached");
   });
 
+  it("says where the history is read and what makes it this cluster's (Settings S3b §3.4)", async () => {
+    answer = () => page({ sentence: "from lgtm-we-logs, hosted by prd, tenant ops, filtered by k8s_cluster_name=dev", source: "lgtm-we-logs", tenant: "ops" });
+    render(<LogHistoryPane cluster="c" target={target} />);
+    await waitFor(() => expect(screen.getByTestId("history-strength").textContent).toContain(" · read from lgtm-we-logs, hosted by prd, tenant ops, filtered by k8s_cluster_name=dev"));
+    expect(screen.getByTestId("history-strength").textContent).not.toContain(" · tenant ops");
+  });
+
   it("an explicit mode change starts a new page set; a UID offer is the person's choice", async () => {
     answer = (req) => (req.mode === "name" ? page({ mode: "name", uidOffer: true, strength: "selected by namespace and name only: every pod with this name in the range" }) : page());
     render(<LogHistoryPane cluster="c" target={target} />);

@@ -75,10 +75,9 @@ const (
 )
 
 const (
-	sourcesSave      = "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' alerts are read again. A hand edit takes effect through \"Use the file's values\"."
-	subscriptionSave = "Review and apply in Observability writes the cluster's alertmanager block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through \"Use the file's values\"."
-	clusterSave      = "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\"."
-	clusterName      = "Edit fleet.yaml: renaming a cluster is a later slice."
+	sourcesSave = "Review and apply in Observability writes the installation into fleet.yaml's sources block, every other line as written, then puts it in force: its subscribers' data is read again. A hand edit takes effect through its kind's \"Use the file's values\"."
+	clusterSave = "Review and apply in Fleet writes the changed fields into the cluster's entry in fleet.yaml, every other line as written, then uses them. A hand edit of the entry takes effect through \"Use the file's values\"."
+	clusterName = "Edit fleet.yaml: renaming a cluster is a later slice."
 	// an endpoint's fields stay file-only until S3
 	endpointSave = "Edit fleet.yaml under clusters[]: Klyx reads the clusters when it starts, and Fleet says when the file differs from what runs."
 	aiSave       = "Save rewrites fleet.yaml's ai block (comments inside it are not kept) and rebuilds the AI in use."
@@ -171,25 +170,27 @@ func endpointEntries() []Entry {
 			e("tenant", "tenant", "Sent as X-Scope-OrgID, for a multi-tenant Mimir, Cortex or Loki.", "none", "Any string; empty sends none."),
 		)
 		if k.id != "metrics" {
-			out = append(out, e("match", "match", "The labels that make an alert or a log stream this cluster's in a shared "+k.label+": sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's.", "none", "A map of label equality matchers."))
+			out = append(out, e("match", "match", "The labels that make an alert or a log stream this cluster's in a shared "+k.label+": sent as the endpoint's filter and checked again on what it returns. None means everything there is this cluster's. On a subscription block Observability edits it; on the cluster's own endpoint block it is set in fleet.yaml.", "none", "A map of label equality matchers."))
+		} else {
+			// Settings S3b §3.3: every metrics query of the cluster carries it
+			out = append(out, e("match", "match", "The labels that make a series this cluster's in a shared Prometheus or Mimir tenant: every metrics query Klyx sends for the cluster carries them, in every selector. None means every series there is this cluster's. On a subscription block Observability's Metrics panel edits it; on the cluster's own endpoint, Service or discovery block it is set in fleet.yaml, beside a legacy token if one is there.", "none", "A map of label equality matchers, none of them a label Prometheus reserves (__name__ or another __ prefix)."))
 		}
 	}
-	// Settings S3a §2.1: a cluster's subscription to an installation. Loki's
-	// are built in S3b: until then each is a load error (S3a §12, R6).
+	// Settings S3a §2.1, S3b §2.1, §8: a cluster's subscription to an
+	// installation, of every kind, edited in its kind's panel.
 	sub := func(kind, id, label, effect, def, validation string) Entry {
-		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki"}[kind]
-		e := Entry{ID: "clusters[]." + kind + "." + id, Section: Observability, Label: name + " " + label, Effect: effect, Scope: "subscription", Default: def, Validation: validation,
-			TakesEffect: OnSave, Save: subscriptionSave, Disposition: Editable, Source: FromSchema}
-		if kind == "loki" {
-			e.Effect, e.Disposition, e.Save = "Not built yet: Loki subscriptions arrive in S3b, and until then this key is a load error.", Deferred, "Not yet: fleet.yaml refuses it."
-		}
-		return e
+		name := map[string]string{"alertmanager": "Alertmanager", "loki": "Loki", "metrics": "Metrics"}[kind]
+		return Entry{ID: "clusters[]." + kind + "." + id, Section: Observability, Label: name + " " + label, Effect: effect, Scope: "subscription", Default: def, Validation: validation,
+			TakesEffect: OnSave, Save: "Review and apply in Observability's " + name + " panel writes the cluster's " + kind + " block into its entry in fleet.yaml, every other line as written, then puts it in force. A hand edit takes effect through that panel's \"Use the file's values\".",
+			Disposition: Editable, Source: FromSchema}
 	}
-	for _, kind := range []string{"alertmanager", "loki"} {
+	for _, kind := range []string{"alertmanager", "loki", "metrics"} {
+		noun := map[string]string{"alertmanager": "alerts", "loki": "log history", "metrics": "metrics"}[kind]
+		fallback := map[string]string{"alertmanager": "else discovery", "loki": "else none: Loki is never discovered", "metrics": "else discovery"}[kind]
 		out = append(out,
-			sub(kind, "source", "installation", "Subscribes the cluster to an installation in sources, with this block's tenant and match over the installation's defaults. A cluster's own block always wins over an installation that serves it.", "none: an installation serving the cluster by name or group, else discovery", "An id in sources, of kind alertmanager."),
+			sub(kind, "source", "installation", "Subscribes the cluster to an installation in sources, with this block's tenant and match over the installation's defaults. A cluster's own block always wins over an installation that serves it.", "none: an installation serving the cluster by name or group, "+fallback, "An id in sources, of kind "+kind+"."),
 			sub(kind, "scope", "scope", "tenant takes everything in the subscription's tenant as the cluster's own. Allowed only when no other subscription of the installation shares that tenant.", "the member label equal to the cluster's name, and the match", "tenant, with source; no match beside it."),
-			sub(kind, "off", "off", "Reads no alerts for the cluster, and says so, even when an installation serves it.", "left out: alerts are read", "true, or left out; nothing else in the block."),
+			sub(kind, "off", "off", "Reads no "+noun+" for the cluster, and says so, even when an installation serves it.", "left out: "+noun+" "+map[bool]string{true: "is", false: "are"}[kind == "loki"]+" read", "true, or left out; nothing else in the block."),
 		)
 	}
 	tok := Entry{ID: "clusters[].metrics.token", Section: Observability, Label: "Metrics token (legacy)", Effect: "A plain-text bearer token, still read. External endpoints moves it to the keychain and replaces this line with auth.", Scope: "endpoint",
@@ -198,7 +199,7 @@ func endpointEntries() []Entry {
 		Default: "none stored", Validation: "Not empty.", TakesEffect: OnAction, Test: "Test reads the endpoint with it.", Save: "Store and Remove change the keychain at once; nothing goes to fleet.yaml.", Disposition: Editable, Source: FromCredential}
 	// Settings S3a §5: an installation's own credential, never a cluster's
 	srcCred := Entry{ID: "credential.source", Section: Observability, Label: "Installation credential", Effect: "The token or password for an installation read at an endpoint with auth, kept in the OS keychain as source/<id> and bound to the endpoint's origin. Klyx shows only whether it is stored; a cluster's credential is never copied into it.", Scope: "installation",
-		Default: "none stored", Validation: "Not empty.", TakesEffect: OnAction, Test: "Test reads the installation's status with it.", Save: "Store and Remove change the keychain at once; nothing goes to fleet.yaml.", Disposition: Editable, Source: FromCredential}
+		Default: "none stored", Validation: "Not empty.", TakesEffect: OnAction, Test: "Test reads the installation with it: Alertmanager's status, Loki's build info, or metrics' liveness.", Save: "Store and Remove change the keychain at once; nothing goes to fleet.yaml.", Disposition: Editable, Source: FromCredential}
 	return append(out, tok, cred, srcCred)
 }
 
@@ -413,8 +414,8 @@ func sourceEntries() []Entry {
 			TakesEffect: OnSave, Save: sourcesSave, Disposition: Editable, Source: FromSchema}
 	}
 	return []Entry{
-		e("id", "Installation id", "Names the installation: subscriptions, its keychain credential and every read of its alerts carry it.", "none: required", "A DNS label, unique among sources."),
-		e("kind", "Installation kind", "What the installation serves.", "none: required", "alertmanager; loki and metrics are not built yet."),
+		e("id", "Installation id", "Names the installation: subscriptions, its keychain credential and every read through it carry it.", "none: required", "A DNS label, unique among sources of every kind."),
+		e("kind", "Installation kind", "What the installation serves: alerts, log history or metrics. Each kind has its own panel; an installation's kind does not change, so another kind is a new installation.", "none: required", "alertmanager, loki or metrics; discover: true is not for loki."),
 		e("name", "Installation name", "A display name, for Settings and the scope sentence.", "the id", "Any string without control characters."),
 		e("host", "Host cluster", "The fleet cluster whose API server reaches a serviceRef or discovered installation. It is transport only: it grants no reads of the host's objects, and a host cannot be removed while an installation names it.", "none: required with serviceRef or discover", "A cluster of the fleet; not with endpoint."),
 		e("serviceRef.namespace", "Installation Service namespace", "The namespace of the Service, in the host, that the installation is reached through.", "none", "A namespace name."),
@@ -428,8 +429,8 @@ func sourceEntries() []Entry {
 		e("auth.type", "Installation authentication", "How Klyx authenticates to the endpoint. The secret is in the keychain as source/<id>, never in the file.", "none", "bearer or basic; endpoint only."),
 		e("auth.username", "Installation username", "The basic-authentication username; the password is in the keychain.", "none", "Any string; basic only."),
 		e("tenant", "Installation tenant", "The default tenant of its subscriptions, sent as X-Scope-OrgID.", "none", "Any string without control characters."),
-		e("memberLabel", "Member label", "The default scope of every subscription: this label equal to the member cluster's name. Subscriptions sharing a tenant need it, with distinct values.", "none: then each subscription states a match or scope: tenant", "A label name."),
-		e("serves[].group", "Serves a group", "Every cluster of this group without its own alertmanager block subscribes to the installation.", "none", "A group name; one key per entry."),
-		e("serves[].cluster", "Serves a cluster", "This cluster, without its own alertmanager block, subscribes to the installation, before any group installation.", "none", "A cluster name; one key per entry."),
+		e("memberLabel", "Member label", "The default scope of every subscription: this label equal to the member cluster's name. Subscriptions sharing a tenant need it, with distinct values.", "none: then each subscription states a match or scope: tenant", "A label name; for metrics, not one Prometheus reserves (__name__ or another __ prefix)."),
+		e("serves[].group", "Serves a group", "Every cluster of this group without its own block of the installation's kind subscribes to the installation.", "none", "A group name; one key per entry."),
+		e("serves[].cluster", "Serves a cluster", "This cluster, without its own block of the installation's kind, subscribes to the installation, before any group installation.", "none", "A cluster name; one key per entry."),
 	}
 }

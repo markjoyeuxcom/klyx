@@ -50,6 +50,13 @@ const metrics = (over: Partial<RuleMetrics> = {}): RuleMetrics => ({
   ...over,
 });
 
+describe("DataPath's source (Settings S3b §3.4)", () => {
+  it("names where the per-rule numbers are read", () => {
+    const { getByText } = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics({ status: { available: true, message: "", updatedAt: at(T), sentence: "from lgtm-we-metrics, hosted by prd, filtered by cluster=x" } })} />);
+    expect(getByText("Read from lgtm-we-metrics, hosted by prd, filtered by cluster=x.")).toBeTruthy();
+  });
+});
+
 describe("DataPath", () => {
   it("draws the Gateway, the route, a branch per rule and each backend's Service", () => {
     const { getByRole } = render(<DataPath gateway={gateway} route={route} listeners={listeners} metrics={metrics()} />);

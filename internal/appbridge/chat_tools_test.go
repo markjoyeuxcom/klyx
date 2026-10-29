@@ -22,42 +22,45 @@ import (
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/routemetrics"
+	"github.com/moomora/klyx/internal/sources"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
 type fakeChatConn struct {
-	kinds        map[string][]fleet.ChatKind
-	incomplete   []string
-	rows         map[string]observe.Rows               // task/part
-	objects      map[string]*unstructured.Unstructured // gvr|ns|name
-	lists        map[string]*unstructured.UnstructuredList
-	listErr      error
-	summary      *observe.Summary
-	events       []workloads.EventSummary
-	eventsCap    bool
-	eventsErr    error
-	logs         fleet.LogSnapshot
-	logsErr      error
-	logCalls     int
-	flux         map[string]*unstructured.Unstructured // Kind|ns|name
-	fluxErr      error
-	fluxCalls    int
-	fluxHook     func(kind string) // runs after each Flux read
-	compare      fleet.WorkloadCompareInfo
-	compareErr   error
-	compareCalls int
-	compareHook  func() // runs after each compare read
-	graph        depgraph.Graph
-	graphUIDs    []string
-	graphHook    func(ctx context.Context) // runs inside DependencyGraph
-	chain        *certmanager.Chain
-	topo         *gwapi.Topology
-	rules        map[string]routemetrics.GatewayRules // by Gateway ns/name
-	ruleCalls    []string
-	series       map[string][]metrics.LabeledSeries // by query
-	seriesErr    error
-	queries      []string
-	steps        []time.Duration
+	// metricsLineage is what a metrics read says it read under (Settings S3b §4)
+	metricsLineage sources.Lineage
+	kinds          map[string][]fleet.ChatKind
+	incomplete     []string
+	rows           map[string]observe.Rows               // task/part
+	objects        map[string]*unstructured.Unstructured // gvr|ns|name
+	lists          map[string]*unstructured.UnstructuredList
+	listErr        error
+	summary        *observe.Summary
+	events         []workloads.EventSummary
+	eventsCap      bool
+	eventsErr      error
+	logs           fleet.LogSnapshot
+	logsErr        error
+	logCalls       int
+	flux           map[string]*unstructured.Unstructured // Kind|ns|name
+	fluxErr        error
+	fluxCalls      int
+	fluxHook       func(kind string) // runs after each Flux read
+	compare        fleet.WorkloadCompareInfo
+	compareErr     error
+	compareCalls   int
+	compareHook    func() // runs after each compare read
+	graph          depgraph.Graph
+	graphUIDs      []string
+	graphHook      func(ctx context.Context) // runs inside DependencyGraph
+	chain          *certmanager.Chain
+	topo           *gwapi.Topology
+	rules          map[string]routemetrics.GatewayRules // by Gateway ns/name
+	ruleCalls      []string
+	series         map[string][]metrics.LabeledSeries // by query
+	seriesErr      error
+	queries        []string
+	steps          []time.Duration
 }
 
 func (f *fakeChatConn) WorkloadCompare(_ context.Context, kind, ns, name string) (fleet.WorkloadCompareInfo, error) {
@@ -102,12 +105,16 @@ func (f *fakeChatConn) RuleMetrics(_ context.Context, ns, name string) (routemet
 	return r, nil
 }
 
-func (f *fakeChatConn) ChatMetricsRange(_ context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+func (f *fakeChatConn) ChatMetricsRange(_ context.Context, q metrics.Query, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, sources.Lineage, error) {
+	promql, err := q.Text(metrics.Scope{})
+	if err != nil {
+		return nil, sources.Lineage{}, err
+	}
 	f.queries, f.steps = append(f.queries, promql), append(f.steps, step)
 	if f.seriesErr != nil {
-		return nil, f.seriesErr
+		return nil, sources.Lineage{}, f.seriesErr
 	}
-	return f.series[promql], nil
+	return f.series[promql], f.metricsLineage, nil
 }
 
 func (f *fakeChatConn) ChatResolveKind(_ context.Context, kind, group string) ([]fleet.ChatKind, []string, error) {

@@ -10,6 +10,14 @@ type MetricsDTO struct {
 	Reason      string   `json:"reason"`
 	CPUFraction *float64 `json:"cpuFraction"`
 	MemFraction *float64 `json:"memFraction"`
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source, so a view refuses a late reply
+	// read under another (Settings S3b §3.2, §3.4)
+	Sentence string `json:"sentence,omitempty"`
+	Lineage  string `json:"lineage,omitempty"`
+	// NoData: both reads answered with no series under the cluster's
+	// scope (S3b §3.3), said rather than shown as nothing
+	NoData string `json:"noData,omitempty"`
 }
 
 // PointDTO is one timestamped sample (unix seconds). Consecutive points may be
@@ -28,6 +36,12 @@ type SparklinesDTO struct {
 	Message   string     `json:"message,omitempty"`
 	CPU       []PointDTO `json:"cpu"`
 	Mem       []PointDTO `json:"mem"`
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source, so a view refuses a late reply
+	// read under another (Settings S3b §3.2, §3.4)
+	Sentence string `json:"sentence,omitempty"`
+	Lineage  string `json:"lineage,omitempty"`
+	NoData   string `json:"noData,omitempty"`
 }
 
 // NodeUsageDTO mirrors workloads.NodeUsage: one node's pod-attributed live
@@ -47,6 +61,14 @@ type NodeUtilizationResultDTO struct {
 	Message       string         `json:"message,omitempty"`
 	UpdatedAtUnix int64          `json:"updatedAtUnix"`
 	Items         []NodeUsageDTO `json:"items"`
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source, so a view refuses a late reply
+	// read under another (Settings S3b §3.2, §3.4)
+	Sentence string `json:"sentence,omitempty"`
+	Lineage  string `json:"lineage,omitempty"`
+	// NoData: the read answered with no series under the cluster's scope
+	// (S3b §3.3), apart from Message's caveats
+	NoData string `json:"noData,omitempty"`
 }
 
 // ContainerUsageDTO is one container's live usage inside a pod.
@@ -62,4 +84,12 @@ type PodUsageResultDTO struct {
 	Message       string              `json:"message,omitempty"`
 	UpdatedAtUnix int64               `json:"updatedAtUnix"`
 	Items         []ContainerUsageDTO `json:"items"`
+	// Sentence says where the metrics came from and what makes them this
+	// cluster's; Lineage keys that source, so a view refuses a late reply
+	// read under another (Settings S3b §3.2, §3.4)
+	Sentence string `json:"sentence,omitempty"`
+	Lineage  string `json:"lineage,omitempty"`
+	// NoData: the read answered with no series under the cluster's scope
+	// (S3b §3.3), apart from Message's caveats
+	NoData string `json:"noData,omitempty"`
 }

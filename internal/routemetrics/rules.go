@@ -20,26 +20,19 @@ import (
 // from the rule history (slice 7b), not here.
 
 const (
-	mRq       = "envoy_cluster_upstream_rq"
-	mRqRetry  = "envoy_cluster_upstream_rq_retry"
-	lRespCode = "envoy_response_code"
+	mRq       = metrics.EnvoyRq
+	mRqRetry  = metrics.EnvoyRqRetry
+	lRespCode = metrics.EnvoyRespCode
 
 	// The proxy pods' owner labels as a Prometheus labelmap of the pod's
 	// labels writes them (gateway.envoyproxy.io/owning-gateway-name ...).
-	lOwnGwName = "gateway_envoyproxy_io_owning_gateway_name"
-	lOwnGwNS   = "gateway_envoyproxy_io_owning_gateway_namespace"
+	lOwnGwName = metrics.EnvoyOwnGatewayName
+	lOwnGwNS   = metrics.EnvoyOwnGatewayNamespace
 
 	// RuleWindow, RuleStep and RuleRate shape every per-rule range query.
 	RuleWindow = 30 * time.Minute
 	RuleStep   = 30 * time.Second
 	RuleRate   = time.Minute
-	ruleRate   = "1m"
-	ruleWindow = "30m"
-
-	// mergedCluster is the name Envoy Gateway gives a backend cluster shared
-	// across routes (mergeBackends): <kind>/<ns>/<name>/<port>[/<protocol>],
-	// for the mergeable kinds. Only merging produces it.
-	mergedCluster = "^(service|serviceimport|backend)/[^/]+/[^/]+/[0-9]+(/[a-z0-9]+)?$"
 )
 
 // ScopeForm is the label pair the series were scoped by.
@@ -231,7 +224,6 @@ func (s *EnvoyRuleSource) QueryRules(ctx context.Context, q RuleQuery) GatewayRu
 	if len(names) == 0 {
 		return out
 	}
-	sel := metrics.MatchAnyOf(lClusterName, "", names, "")
 	pods := onceList(q.Pods)
 
 	// A shared (merged) cluster on this Gateway's proxies: a rule's own
@@ -257,7 +249,7 @@ func (s *EnvoyRuleSource) QueryRules(ctx context.Context, q RuleQuery) GatewayRu
 	for _, m := range ruleMetrics {
 		rd := &metricRead{}
 		reads[m] = rd
-		probe, err := s.client.InstantVector(ctx, fmt.Sprintf("last_over_time(%s{%s}[%s])", m, sel, ruleWindow))
+		probe, err := s.client.InstantVector(ctx, metrics.RuleProbeQuery.With(metrics.RuleProbe{Family: m, Clusters: names}))
 		switch {
 		case err != nil:
 			rd.err = err
@@ -301,20 +293,17 @@ func (s *EnvoyRuleSource) QueryRules(ctx context.Context, q RuleQuery) GatewayRu
 	}
 	out.Scope, out.ScopeNote = form, note
 
-	rangeOf := func(metric, extra, by string) {
+	rangeOf := func(metric, family string) {
 		rd := reads[metric]
 		if rd.err != nil || rd.absent {
 			return
 		}
-		inner := orEach(scopes, func(sc string) string {
-			return fmt.Sprintf("rate(%s{%s,%s%s}[%s])", metric, sel, sc, extra, ruleRate)
-		})
-		rd.series, rd.err = s.client.RangeMatrix(ctx, fmt.Sprintf("sum by (%s%s) (%s)", lClusterName, by, inner), out.Start, out.End, RuleStep)
+		rd.series, rd.err = s.client.RangeMatrix(ctx, metrics.RuleRangeQuery.With(metrics.RuleRange{Family: family, Clusters: names, Proxies: scopes}), out.Start, out.End, RuleStep)
 	}
-	rangeOf(mRqTotal, "", "")
-	rangeOf(mRqXX, "", ", "+lRespClass)
-	rangeOf(mRq, ","+metrics.Equals(lRespCode, "503"), "")
-	rangeOf(mRqRetry, "", "")
+	rangeOf(mRqTotal, "total")
+	rangeOf(mRqXX, "xx")
+	rangeOf(mRq, "503")
+	rangeOf(mRqRetry, "retry")
 	reduceRules(&out, reads)
 	return out
 }
@@ -353,9 +342,9 @@ func detectForm(probe []metrics.LabeledSample) (ScopeForm, bool) {
 
 // scopesFor builds one matcher set per pod namespace (one in all for the
 // owner labels), joined by "or" in every query.
-func scopesFor(ctx context.Context, q RuleQuery, form ScopeForm, pods func(context.Context) ([]ProxyPod, error)) (sel []string, note, reason string) {
+func scopesFor(ctx context.Context, q RuleQuery, form ScopeForm, pods func(context.Context) ([]ProxyPod, error)) (sel []metrics.ProxySet, note, reason string) {
 	if form == ScopeOwningGateway {
-		return []string{metrics.Equals(lOwnGwName, q.GatewayName) + "," + metrics.Equals(lOwnGwNS, q.GatewayNamespace)}, "", ""
+		return []metrics.ProxySet{{Equal: [][2]string{{lOwnGwName, q.GatewayName}, {lOwnGwNS, q.GatewayNamespace}}}}, "", ""
 	}
 	list, err := pods(ctx)
 	if err != nil {
@@ -380,7 +369,7 @@ func scopesFor(ctx context.Context, q RuleQuery, form ScopeForm, pods func(conte
 	for _, ns := range nss {
 		names := byNS[ns]
 		sort.Strings(names)
-		sel = append(sel, metrics.Equals(nsL, ns)+","+metrics.MatchAnyOf(nameL, "", names, ""))
+		sel = append(sel, metrics.ProxySet{Equal: [][2]string{{nsL, ns}}, NameLabel: nameL, Names: names})
 	}
 	return sel, NoteCurrentPods, ""
 }
@@ -451,16 +440,9 @@ func proxyIdentity(l map[string]string) string {
 // to the Gateway by any pair it has. A sample with no pair, or a check that
 // fails, cannot be ruled out, so it counts.
 func (s *EnvoyRuleSource) sharedClusters(ctx context.Context, q RuleQuery, pods func(context.Context) ([]ProxyPod, error)) string {
-	by := make([]string, 0, 2*len(scopePairs))
-	for _, p := range scopePairs {
-		by = append(by, p.name, p.ns)
-	}
 	// Every family, so one filtered out never hides a merged cluster; "or"
 	// keeps one sample per label set where the families share them.
-	inner := orEach(ruleMetrics, func(m string) string {
-		return fmt.Sprintf("last_over_time(%s{%s=~%s}[%s])", m, lClusterName, strconv.Quote(mergedCluster), ruleWindow)
-	})
-	samples, err := s.client.InstantVector(ctx, fmt.Sprintf("count by (%s) (%s)", strings.Join(by, ", "), inner))
+	samples, err := s.client.InstantVector(ctx, metrics.RuleShared.With(metrics.None{}))
 	if err != nil {
 		return "could not check for shared clusters: " + err.Error()
 	}
@@ -520,16 +502,6 @@ func onceList(f func(context.Context) ([]ProxyPod, error)) func(context.Context)
 		}
 		return list, err
 	}
-}
-
-// orEach joins one expression per scope with "or": the scopes' label sets
-// differ, so nothing collides.
-func orEach(scopes []string, f func(string) string) string {
-	parts := make([]string, len(scopes))
-	for i, sc := range scopes {
-		parts[i] = f(sc)
-	}
-	return strings.Join(parts, " or ")
 }
 
 // byCluster indexes a matrix by its rule cluster name; other shapes are skipped.

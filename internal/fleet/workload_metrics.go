@@ -2,19 +2,10 @@ package fleet
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/workloads"
-)
-
-// cAdvisor series confirmed present on the homelab. container!="",container!="POD"
-// drops the pod-sandbox/empty rollup series. %s is the namespace matcher (empty for
-// cluster-wide). The [5m] rate window is the v1 default.
-const (
-	wlCPUQuery = `sum by (namespace,pod) (rate(container_cpu_usage_seconds_total{%scontainer!="",container!="POD"}[5m]))`
-	wlMemQuery = `sum by (namespace,pod) (container_memory_working_set_bytes{%scontainer!="",container!="POD"})`
 )
 
 // WorkloadMetrics returns live per-workload cpu/memory usage keyed by the stable
@@ -34,7 +25,8 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 	}
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	defer mr.release()
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -44,33 +36,34 @@ func (c *ClusterConn) WorkloadMetrics(ctx context.Context, namespace string) (ma
 		return nil, workloads.UsageStatus{Available: false, Message: msg}
 	}
 
-	nsMatch := ""
-	if namespace != "" {
-		nsMatch = fmt.Sprintf("namespace=%q,", namespace)
-	}
-	cl := metrics.NewClient(transport)
-	cpuByPod, err := queryByPod(ctx, cl, fmt.Sprintf(wlCPUQuery, nsMatch))
+	cl := mr.client
+	ns := metrics.Namespace{Name: namespace}
+	cpuByPod, cpuSeries, err := queryByPod(ctx, cl, metrics.PodCPU.With(ns))
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "cpu usage query failed: " + err.Error()}
 	}
-	memByPod, err := queryByPod(ctx, cl, fmt.Sprintf(wlMemQuery, nsMatch))
+	memByPod, memSeries, err := queryByPod(ctx, cl, metrics.PodMem.With(ns))
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
-	if c.credentialMoved(mr.rev) {
-		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + why}
 	}
-	return workloads.AggregateUsage(ws, cpuByPod, memByPod), workloads.UsageStatus{Available: true, UpdatedAt: now}
+	st := workloads.UsageStatus{Available: true, UpdatedAt: now, Sentence: cap.Sentence, Lineage: cap.Lineage}
+	if cpuSeries == 0 && memSeries == 0 {
+		st.NoData = mr.noData()
+	}
+	return workloads.AggregateUsage(ws, cpuByPod, memByPod), st
 }
 
 // queryByPod runs a `sum by (namespace,pod)` instant query and reduces it to
 // "<namespace>/<pod>" -> value. Samples missing either label are dropped (no
 // ambiguous key). NaN/Inf are already skipped by InstantVector.
-func queryByPod(ctx context.Context, cl *metrics.Client, promql string) (map[string]float64, error) {
-	samples, err := cl.InstantVector(ctx, promql)
+func queryByPod(ctx context.Context, cl *metrics.Client, q metrics.Query) (map[string]float64, int, error) {
+	samples, series, err := cl.InstantVectorSeen(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	out := make(map[string]float64, len(samples))
 	for _, s := range samples {
@@ -80,5 +73,5 @@ func queryByPod(ctx context.Context, cl *metrics.Client, promql string) (map[str
 		}
 		out[ns+"/"+pod] = s.Value
 	}
-	return out, nil
+	return out, series, nil
 }

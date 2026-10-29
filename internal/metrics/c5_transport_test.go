@@ -49,7 +49,7 @@ func TestGuardedProxyRedirectDoesNotExportKubeCredential(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := NewProxyTransport(rc, ServiceCandidate{Namespace: "monitoring", Name: "echo", Port: "80", Scheme: "http"})
-			_, _, err = q.InstantQuery(context.Background(), "vector(1)")
+			_, _, err = q.q.InstantQuery(context.Background(), "vector(1)")
 			if err == nil || !strings.Contains(err.Error(), "another origin") {
 				t.Fatalf("the redirect is refused: %v", err)
 			}
@@ -76,7 +76,7 @@ func TestGuardedProxyFollowsSameOriginRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := NewProxyTransport(rc, ServiceCandidate{Namespace: "monitoring", Name: "echo", Port: "80", Scheme: "http"})
-	if err := NewClient(q).Liveness(context.Background()); err != nil {
+	if err := NewClient(q, Scope{}).Liveness(context.Background()); err != nil {
 		t.Fatalf("same-origin redirect: %v", err)
 	}
 }
@@ -100,9 +100,9 @@ func TestEchoedCredentialNeverLeavesTheTransport(t *testing.T) {
 		if got := Probe(context.Background(), Resolution{Transport: q}); strings.Contains(got.Reason, token) || got.Reason == "" {
 			t.Fatalf("the probe's reason: %q", got.Reason)
 		}
-		c := NewClient(q)
-		_, err := c.InstantScalar(context.Background(), "up")
-		_, rerr := c.RangeSeries(context.Background(), "up", time.Unix(0, 0), time.Unix(60, 0), time.Minute)
+		c := NewClient(q, Scope{})
+		_, err := c.InstantScalar(context.Background(), raw("up"))
+		_, rerr := c.RangeSeries(context.Background(), raw("up"), time.Unix(0, 0), time.Unix(60, 0), time.Minute)
 		for _, e := range []error{err, rerr} {
 			if e == nil || strings.Contains(e.Error(), token) {
 				t.Fatalf("an error leaked or was lost: %v", e)
@@ -118,7 +118,7 @@ func TestDirectReadPastTheCapIsAnError(t *testing.T) {
 	}))
 	defer big.Close()
 	q := NewDirectTransport(big.URL, "", safehttp.NewClient(DirectPolicy(5*time.Second, false)))
-	if _, _, err := q.InstantQuery(context.Background(), "up"); !strings.Contains(errStr(err), "exceeded") {
+	if _, _, err := q.q.InstantQuery(context.Background(), "up"); !strings.Contains(errStr(err), "exceeded") {
 		t.Fatalf("past the cap: %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestProxyReadPastTheCapIsAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := NewProxyTransport(rc, ServiceCandidate{Namespace: "monitoring", Name: "p", Port: "9090", Scheme: "http"})
-	if _, _, err := q.InstantQuery(context.Background(), "up"); !errors.Is(err, ErrResponseTooLarge) {
+	if _, _, err := q.q.InstantQuery(context.Background(), "up"); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("past the cap: %v", err)
 	}
 }
@@ -176,7 +176,7 @@ func TestProxyCarriesTenantAndOnlyKubeAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := NewProxyTransportTenant(rc, ServiceCandidate{Namespace: "monitoring", Name: "mimir", Port: "8080", Scheme: "http"}, "platform")
-	if err := NewClient(q).Liveness(context.Background()); err != nil {
+	if err := NewClient(q, Scope{}).Liveness(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if gotTenant != "platform" || gotAuth != "Bearer kube-tok" {

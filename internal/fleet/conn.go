@@ -177,7 +177,10 @@ type ClusterConn struct {
 	kubeconfigPaths []string
 	restConfig      *rest.Config // for SPDY transports (port-forward); nil in fake-client tests
 	// guardedREST is the metrics service-proxy client built from restConfig
-	// (C5 §4), once, under metricsMu.
+	// (C5 §4), once, under guardedMu: its own lock, since a member reading
+	// through an installation this connection hosts builds it too (Settings
+	// S3b §3.1), the connection itself included
+	guardedMu      sync.Mutex
 	guardedREST    rest.Interface
 	guardedRESTErr error
 	// creds resolves external endpoints' credentials (C5 §3, §7).

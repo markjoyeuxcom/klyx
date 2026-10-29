@@ -5,22 +5,58 @@ package metrics
 
 import (
 	"context"
+	"time"
 
 	"github.com/moomora/klyx/internal/endpointhttp"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
-// Sample is one scalar value from an instant query. Absent reports "no data".
+// Sample is one scalar value from an instant query. Absent reports "no
+// data"; Empty says it was an answer with no series at all, told apart from
+// a non-finite value (Settings S3b §3.3: no data under a scope is said,
+// never a zero).
 type Sample struct {
 	Value  float64
 	Absent bool
+	Empty  bool
 }
 
 // Querier executes a PromQL instant query and returns the HTTP status and body.
-// Transports implement it; the Client parses.
+// Transports implement it; the Client parses. Outside this package a
+// Querier is only implemented (a test's fake), never sent to: transports
+// travel as a Transport, which only a Client sends through (Settings S3b
+// §3.3).
 type Querier interface {
 	InstantQuery(ctx context.Context, promql string) (status int, body []byte, err error)
 }
+
+// Transport is a transport, opaque: its requests take PromQL text, so only
+// a Client sends through it, rendering a registered template under its own
+// scope (Settings S3b §3.3). The zero Transport is none.
+type Transport struct{ q Querier }
+
+// TransportOf makes q a Transport: a test's fake. No production file
+// outside this package calls it, and none writes the Prometheus query
+// API's paths, so a Querier written elsewhere never reaches Prometheus
+// (TestNoOtherPackageWritesThePrometheusQueryAPI; Codex's re-review of
+// S3b-2a, RR2).
+func TransportOf(q Querier) Transport { return Transport{q: q} }
+
+// FailedTransport is a transport whose every request fails with err,
+// sending nothing: a connection that could not build its proxy client
+// reads as unavailable with the reason, never through an unguarded one.
+func FailedTransport(err error) Transport { return Transport{q: failed{err: err}} }
+
+type failed struct{ err error }
+
+func (f failed) InstantQuery(context.Context, string) (int, []byte, error) { return 0, nil, f.err }
+
+func (f failed) RangeQuery(context.Context, string, time.Time, time.Time, time.Duration) (int, []byte, error) {
+	return 0, nil, f.err
+}
+
+// IsZero: no transport.
+func (t Transport) IsZero() bool { return t.q == nil }
 
 // Mode is how the connection was resolved.
 type Mode string
@@ -29,7 +65,9 @@ const (
 	ModeExplicitEndpoint Mode = "explicit-endpoint"
 	ModeExplicitService  Mode = "explicit-service-ref"
 	ModeDiscovered       Mode = "discovered-service"
-	ModeUnavailable      Mode = "unavailable"
+	// ModeSubscribed reads through an installation (Settings S3b §3.1)
+	ModeSubscribed  Mode = "subscribed"
+	ModeUnavailable Mode = "unavailable"
 )
 
 // ServiceCandidate is an in-cluster Prometheus Service to proxy to.
@@ -50,7 +88,7 @@ type DiscoveryResult struct {
 type Resolution struct {
 	Mode      Mode
 	Source    string // URL, or "ns/name:port" for service modes
-	Transport Querier
+	Transport Transport
 	Warning   string // non-fatal context on a working connection
 	Reason    string // why unavailable
 }
@@ -62,6 +100,16 @@ type MetricsCapability struct {
 	Source    string
 	Warning   string
 	Reason    string
+	// Withdrawn: the call itself ended the probe - its context's fence
+	// refused it, or its context ended - so it says nothing of the backend:
+	// this call's answer, never a capability to keep (Settings S3b-2b
+	// re-reviews 2 and 3, R2-1 and R3-1)
+	Withdrawn bool `json:"-"`
+	// Sentence says where the metrics come from and what makes them this
+	// cluster's, and Lineage keys the source a view shows (Settings S3b
+	// §3.2, §3.4)
+	Sentence string
+	Lineage  string
 }
 
 // ClusterMetrics is the proof-of-life readout. Nil pointers mean "no data",
@@ -69,13 +117,16 @@ type MetricsCapability struct {
 type ClusterMetrics struct {
 	CPUFraction *float64
 	MemFraction *float64
+	// NoData says that both reads answered with no series under the
+	// cluster's scope (Settings S3b §3.3); "" otherwise
+	NoData string
 }
 
 // TransportFactory builds transports. The fleet layer supplies the real one
 // (it owns the cluster REST client); tests supply a fake.
 type TransportFactory interface {
-	Direct(base string, auth Auth, tlsSkipVerify bool) Querier
-	Proxy(c ServiceCandidate, tenant string) Querier
+	Direct(base string, auth Auth, tlsSkipVerify bool) Transport
+	Proxy(c ServiceCandidate, tenant string) Transport
 }
 
 // Auth is what a direct request to an endpoint carries (coverage C5 §3-§7);

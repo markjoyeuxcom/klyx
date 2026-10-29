@@ -178,6 +178,10 @@ func TestRuleMetricsRoutesAndScope(t *testing.T) {
 	if !res.Status.Available || res.Unattributable != "" || res.Scope != routemetrics.ScopeOwningGateway {
 		t.Fatalf("result: %+v", res)
 	}
+	// the read's whole lineage, for an AI read to record (Settings S3b §4)
+	if res.Status.Provenance.Kind != config.EndpointMetrics || res.Status.Provenance.Key() != res.Status.Lineage || res.Status.Lineage == "" {
+		t.Fatalf("provenance: %+v %q", res.Status.Provenance, res.Status.Lineage)
+	}
 	// Whole seconds, so points and cut-offs compare exactly.
 	if !res.End.Equal(time.Unix(1792080000, 0)) || !res.Status.UpdatedAt.Equal(res.End) {
 		t.Fatalf("end %v updated %v", res.End, res.Status.UpdatedAt)

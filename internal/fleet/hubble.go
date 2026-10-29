@@ -5,7 +5,6 @@ import (
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/hubble"
-	"github.com/moomora/klyx/internal/metrics"
 )
 
 // HubbleFlowStats returns the cluster's Hubble flow/drop triage readout from
@@ -27,7 +26,8 @@ func (c *ClusterConn) HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hu
 	}
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	defer mr.release()
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -37,14 +37,18 @@ func (c *ClusterConn) HubbleFlowStats(ctx context.Context) (hubble.FlowStats, hu
 		return hubble.FlowStats{}, hubble.Status{Available: false, Message: msg}
 	}
 
-	src := hubble.NewSource(metrics.NewClient(transport))
+	src := hubble.NewSource(mr.client)
 	stats, st, err := src.QueryFlowStats(ctx)
 	if err != nil {
 		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "hubble metrics query failed: " + err.Error()}
 	}
-	if c.credentialMoved(mr.rev) {
-		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return hubble.FlowStats{}, hubble.Status{Available: false, Message: "metrics unavailable: " + why}
 	}
 	st.UpdatedAt = now // fleet stamps freshness on a produced result
+	st.Sentence, st.Lineage = cap.Sentence, cap.Lineage
+	if w := mr.noData(); st.NoSeries && w != "" {
+		st.Message = w + ": " + st.Message
+	}
 	return stats, st
 }

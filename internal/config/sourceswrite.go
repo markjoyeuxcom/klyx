@@ -13,17 +13,29 @@ import (
 
 // Settings S3a §5: an Observability plan's edits are built in memory into
 // one disk candidate - the sources block by block replacement, each
-// cluster's alertmanager block by an entry edit - which must load strictly
+// cluster's block of a kind by an entry edit - which must load strictly
 // (and so resolve) and change only the intended blocks, and is written
 // once, against the plan's file version, through slice 0's write policy.
 
 // SourcesEdit is one Observability plan's edits to the fleet file. Sources,
 // when set, replaces the top-level sources block; an empty list removes
-// it. Blocks replaces each named cluster's alertmanager block with a
-// subscription block; nil removes the block.
+// it. Blocks replaces a cluster's block of a kind - alertmanager, loki or
+// metrics (Settings S3b §5) - with a subscription block; nil removes it.
 type SourcesEdit struct {
 	Sources *[]SourceConfig
-	Blocks  map[string]*EndpointConfig
+	Blocks  map[BlockRef]*EndpointConfig
+}
+
+// BlockRef is one cluster's block of one kind.
+type BlockRef struct{ Cluster, Kind string }
+
+// blockKey is a kind's key in a cluster's entry.
+func blockKey(kind string) (string, error) {
+	switch kind {
+	case EndpointAlertmanager, EndpointLoki, EndpointMetrics:
+		return kind, nil
+	}
+	return "", fmt.Errorf("%s is not a kind of observability block", describeValue(kind))
 }
 
 // BuildSourcesCandidate is the disk candidate: doc with e applied, loaded
@@ -50,13 +62,18 @@ func BuildSourcesCandidate(doc []byte, e SourcesEdit) ([]byte, *Config, error) {
 		}
 		candidate = []byte(out)
 	}
-	names := make([]string, 0, len(e.Blocks))
-	for name := range e.Blocks {
-		names = append(names, name)
+	refs := make([]BlockRef, 0, len(e.Blocks))
+	for ref := range e.Blocks {
+		refs = append(refs, ref)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		out, err := editEntryAlertmanager(candidate, name, e.Blocks[name])
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Cluster != refs[j].Cluster {
+			return refs[i].Cluster < refs[j].Cluster
+		}
+		return refs[i].Kind < refs[j].Kind
+	})
+	for _, ref := range refs {
+		out, err := editEntryBlock(candidate, ref, e.Blocks[ref])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -96,9 +113,17 @@ func CheckSources(sources []SourceConfig, clusters []ClusterConfig) (map[string]
 		return nil, err
 	}
 	for _, cl := range clusters {
-		if err := validateSubscription(cl.Name, EndpointAlertmanager, cl.Alertmanager); err != nil {
-			return nil, err
+		for _, e := range cl.Endpoints() {
+			spec := e.Spec
+			if err := validateSubscription(cl.Name, e.Kind, &spec, e.LegacyToken); err != nil {
+				return nil, err
+			}
 		}
+	}
+	// every kind resolves, so an Alertmanager plan never publishes a
+	// candidate whose Loki or metrics resolution fails (S3b §2.2)
+	if err := ResolveAll(sources, clusters); err != nil {
+		return nil, err
 	}
 	return ResolveAlertmanager(sources, clusters)
 }
@@ -215,11 +240,15 @@ func renderSources(sources []SourceConfig, eol string) (string, error) {
 	return b.String(), nil
 }
 
-// subscriptionBlock is a cluster's alertmanager block in Klyx's form, as
+// subscriptionBlock is a cluster's block of a kind in Klyx's form, as
 // lines at indent. Settings writes subscription blocks only: an
 // installation, a scope, off, and the tenant and match over the
 // installation's defaults; a legacy block stays the file's.
-func subscriptionBlock(e *EndpointConfig, indent, eol string) ([]string, error) {
+func subscriptionBlock(kind string, e *EndpointConfig, indent, eol string) ([]string, error) {
+	key, err := blockKey(kind)
+	if err != nil {
+		return nil, err
+	}
 	if e.Endpoint != "" || e.ServiceRef != nil || e.Auth != nil || e.TLSSkipVerify {
 		return nil, errors.New("only a subscription block is written here; an endpoint or Service stays the file's")
 	}
@@ -227,7 +256,7 @@ func subscriptionBlock(e *EndpointConfig, indent, eol string) ([]string, error) 
 		return nil, errors.New("a subscription block names its installation, or is off")
 	}
 	in := indent + "  "
-	out := []string{indent + "alertmanager:" + eol}
+	out := []string{indent + key + ":" + eol}
 	if e.Off {
 		return append(out, in+"off: true"+eol), nil
 	}
@@ -252,9 +281,14 @@ func subscriptionBlock(e *EndpointConfig, indent, eol string) ([]string, error) 
 	return out, nil
 }
 
-// editEntryAlertmanager replaces the named cluster's alertmanager block
-// with block, adds it, or removes it (nil), line by line in the entry.
-func editEntryAlertmanager(doc []byte, name string, block *EndpointConfig) ([]byte, error) {
+// editEntryBlock replaces the named cluster's block of a kind with block,
+// adds it, or removes it (nil), line by line in the entry.
+func editEntryBlock(doc []byte, ref BlockRef, block *EndpointConfig) ([]byte, error) {
+	name := ref.Cluster
+	key, err := blockKey(ref.Kind)
+	if err != nil {
+		return nil, err
+	}
 	e, err := findEntry(doc, name, false)
 	if err != nil {
 		return nil, err
@@ -266,9 +300,9 @@ func editEntryAlertmanager(doc []byte, name string, block *EndpointConfig) ([]by
 	}
 	at := -1
 	for i := 0; i+1 < len(it.Content); i += 2 {
-		if it.Content[i].Value == "alertmanager" {
+		if it.Content[i].Value == key {
 			if at >= 0 {
-				return nil, hand("the key alertmanager appears twice")
+				return nil, hand("the key " + key + " appears twice")
 			}
 			at = i
 		}
@@ -278,14 +312,14 @@ func editEntryAlertmanager(doc []byte, name string, block *EndpointConfig) ([]by
 	eol := docEOL(e.lines)
 	var lines []string
 	if block != nil {
-		if lines, err = subscriptionBlock(block, indent, eol); err != nil {
+		if lines, err = subscriptionBlock(ref.Kind, block, indent, eol); err != nil {
 			return nil, err
 		}
 	}
 	if at >= 0 {
 		first := it.Content[at].Line - 1
 		if first == e.dash {
-			return nil, hand("its alertmanager block starts on the list dash's line")
+			return nil, hand("its " + key + " block starts on the list dash's line")
 		}
 		next := e.end + 1
 		if at+2 < len(it.Content) {
@@ -335,17 +369,21 @@ func onlySourcesChanged(before, after []byte, e SourcesEdit) error {
 		}
 	}
 	clusters, _ := a["clusters"].([]any)
-	for name, block := range e.Blocks {
+	for ref, block := range e.Blocks {
+		key, err := blockKey(ref.Kind)
+		if err != nil {
+			return err
+		}
 		found := false
 		for _, c := range clusters {
 			entry, _ := c.(map[string]any)
-			if entry == nil || entry["name"] != name {
+			if entry == nil || entry["name"] != ref.Cluster {
 				continue
 			}
 			found = true
-			delete(entry, "alertmanager")
+			delete(entry, key)
 			if block != nil {
-				lines, err := subscriptionBlock(block, "", "\n")
+				lines, err := subscriptionBlock(ref.Kind, block, "", "\n")
 				if err != nil {
 					return err
 				}
@@ -353,11 +391,11 @@ func onlySourcesChanged(before, after []byte, e SourcesEdit) error {
 				if err := yaml.Unmarshal([]byte(strings.Join(lines, "")), &m); err != nil {
 					return err
 				}
-				entry["alertmanager"] = m["alertmanager"]
+				entry[key] = m[key]
 			}
 		}
 		if !found {
-			return fmt.Errorf("cluster %s is not in fleet.yaml", describeValue(name))
+			return fmt.Errorf("cluster %s is not in fleet.yaml", describeValue(ref.Cluster))
 		}
 	}
 	if !reflect.DeepEqual(a, b) {

@@ -31,6 +31,7 @@ const inst = (over: Partial<Installation> = {}): Installation => ({
 });
 
 const state = (over: Partial<SourcesState> = {}): SourcesState => ({
+  kind: "alertmanager",
   sentence: "One installation is in force; dev subscribes to it.",
   installations: [inst()],
   subscriptions: [
@@ -279,7 +280,7 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
 
   it("leaves an offer's conflicts to the person: no auth or certificate check is preselected (S3a §7)", async () => {
     b.migrationOffers.mockResolvedValue([{
-      where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [],
+      kind: "alertmanager", where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [],
       conflicts: ["The clusters authenticate differently (prd bearer, dev basic): choose the installation's auth.", "The clusters check the certificate differently (prd not verified, dev verified): choose whether the installation verifies it."],
       unresolved: ["auth", "tlsSkipVerify"],
       draft: { installation: { op: "add", source: { id: "am-am", endpoint: "https://am.example" } }, subscriptions: [{ cluster: "dev", block: { source: "am-am", match: { cluster: "dev" } } }, { cluster: "prd", block: { source: "am-am", match: { cluster: "prd" } } }] },
@@ -317,8 +318,8 @@ describe("Settings > Observability > Alert sources (S3a §8)", () => {
       }],
     });
     renderPanel();
-    fireEvent.change(await screen.findByLabelText("what Detect looks in"), { target: { value: "c:prd" } });
-    fireEvent.click(screen.getByRole("button", { name: "Detect" }));
+    fireEvent.change(await screen.findByLabelText("what alertmanager Detect looks in"), { target: { value: "c:prd" } });
+    fireEvent.click(screen.getByRole("button", { name: "detect alertmanager" }));
     const proposal = await screen.findByTestId("detect-proposal");
     expect(b.detect).toHaveBeenCalledWith({ cluster: "prd" });
     expect(proposal.textContent).toContain("never proof");
@@ -344,7 +345,7 @@ describe("Settings > Observability > Alert sources, Codex's review of S3a-4c", (
     renderPanel();
     const ed = await editShared();
     fireEvent.change(endpointOf(ed), { target: { value: "https://am.example/typed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add an installation" }));
+    fireEvent.click(screen.getByRole("button", { name: "add an Alertmanager installation" }));
     expect(useLeaveRequest.getState().request?.unsaved).toEqual(["a change to the alert sources not yet applied"]);
     await act(async () => { await resolveLeave("stay"); });
     expect(endpointOf(screen.getByTestId("installation-editor")).value).toBe("https://am.example/typed");
@@ -443,7 +444,7 @@ describe("Settings > Observability > Alert sources, Codex's review of S3a-4c", (
 
   it("R5: renaming an offered installation keeps its carried subscriptions attached; others stay", async () => {
     b.migrationOffers.mockResolvedValue([{
-      where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [], conflicts: [], unresolved: [],
+      kind: "alertmanager", where: "https://am.example:443", clusters: ["prd", "dev"], scopes: [], choices: [], conflicts: [], unresolved: [],
       draft: { installation: { op: "add", source: { id: "proposed-am", endpoint: "https://am.example" } }, subscriptions: [
         { cluster: "dev", block: { source: "proposed-am", match: { cluster: "dev" } } },
         { cluster: "prd", block: { source: "shared", match: { cluster: "prd" } } },

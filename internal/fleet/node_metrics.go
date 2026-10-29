@@ -2,19 +2,10 @@ package fleet
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moomora/klyx/internal/clock"
 	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/workloads"
-)
-
-// Per-container usage for one pod: the same confirmed cAdvisor series the
-// workload aggregate uses, reduced by container instead of pod. %s/%s are the
-// namespace and pod matchers.
-const (
-	ctCPUQuery = `sum by (container) (rate(container_cpu_usage_seconds_total{namespace=%q,pod=%q,container!="",container!="POD"}[5m]))`
-	ctMemQuery = `sum by (container) (container_memory_working_set_bytes{namespace=%q,pod=%q,container!="",container!="POD"})`
 )
 
 // NodeUtilization returns per-node pod-attributed live usage: the cluster-wide
@@ -37,7 +28,8 @@ func (c *ClusterConn) NodeUtilization(ctx context.Context) ([]workloads.NodeUsag
 	}
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	defer mr.release()
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -47,22 +39,25 @@ func (c *ClusterConn) NodeUtilization(ctx context.Context) ([]workloads.NodeUsag
 		return nil, workloads.UsageStatus{Available: false, Message: msg}
 	}
 
-	cl := metrics.NewClient(transport)
-	cpuByPod, err := queryByPod(ctx, cl, fmt.Sprintf(wlCPUQuery, ""))
+	cl := mr.client
+	cpuByPod, cpuSeries, err := queryByPod(ctx, cl, metrics.PodCPU.With(metrics.Namespace{}))
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "cpu usage query failed: " + err.Error()}
 	}
-	memByPod, err := queryByPod(ctx, cl, fmt.Sprintf(wlMemQuery, ""))
+	memByPod, memSeries, err := queryByPod(ctx, cl, metrics.PodMem.With(metrics.Namespace{}))
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
-	if c.credentialMoved(mr.rev) {
-		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + why}
 	}
-	st := workloads.UsageStatus{Available: true, UpdatedAt: now}
+	st := workloads.UsageStatus{Available: true, UpdatedAt: now, Sentence: cap.Sentence, Lineage: cap.Lineage}
 	if truncated {
 		st.Message = "pod list capped - node usage may under-count"
+	}
+	if cpuSeries == 0 && memSeries == 0 {
+		st.NoData = mr.noData()
 	}
 	return workloads.AggregateNodeUsage(pods, cpuByPod, memByPod), st
 }
@@ -79,7 +74,8 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 	now := clk.Now()
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	defer mr.release()
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -89,18 +85,18 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 		return nil, workloads.UsageStatus{Available: false, Message: msg}
 	}
 
-	cl := metrics.NewClient(transport)
-	cpuByCt, err := queryByLabel(ctx, cl, fmt.Sprintf(ctCPUQuery, namespace, pod), "container")
+	cl := mr.client
+	cpuByCt, cpuSeries, err := queryByLabel(ctx, cl, metrics.ContainerCPU.With(metrics.Pod{Namespace: namespace, Name: pod}), "container")
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "cpu usage query failed: " + err.Error()}
 	}
-	memByCt, err := queryByLabel(ctx, cl, fmt.Sprintf(ctMemQuery, namespace, pod), "container")
+	memByCt, memSeries, err := queryByLabel(ctx, cl, metrics.ContainerMem.With(metrics.Pod{Namespace: namespace, Name: pod}), "container")
 	if err != nil {
 		return nil, workloads.UsageStatus{Available: false, Message: "memory usage query failed: " + err.Error()}
 	}
 
-	if c.credentialMoved(mr.rev) {
-		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, workloads.UsageStatus{Available: false, Message: "metrics unavailable: " + why}
 	}
 	out := make(map[string]workloads.Usage, len(cpuByCt)+len(memByCt))
 	for name, v := range cpuByCt {
@@ -115,15 +111,19 @@ func (c *ClusterConn) PodContainerUsage(ctx context.Context, namespace, pod stri
 		u.Mem = &mv
 		out[name] = u
 	}
-	return out, workloads.UsageStatus{Available: true, UpdatedAt: now}
+	st := workloads.UsageStatus{Available: true, UpdatedAt: now, Sentence: cap.Sentence, Lineage: cap.Lineage}
+	if cpuSeries == 0 && memSeries == 0 {
+		st.NoData = mr.noData()
+	}
+	return out, st
 }
 
 // queryByLabel runs an instant query and reduces it to label-value -> sample.
 // Samples missing the label are dropped (no ambiguous key).
-func queryByLabel(ctx context.Context, cl *metrics.Client, promql, label string) (map[string]float64, error) {
-	samples, err := cl.InstantVector(ctx, promql)
+func queryByLabel(ctx context.Context, cl *metrics.Client, q metrics.Query, label string) (map[string]float64, int, error) {
+	samples, series, err := cl.InstantVectorSeen(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	out := make(map[string]float64, len(samples))
 	for _, s := range samples {
@@ -133,5 +133,5 @@ func queryByLabel(ctx context.Context, cl *metrics.Client, promql, label string)
 		}
 		out[k] = s.Value
 	}
-	return out, nil
+	return out, series, nil
 }

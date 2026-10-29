@@ -1,18 +1,26 @@
 import { useFleet, MetricsDTO, NodeUtilizationResultDTO, PodUsageResultDTO } from "../store/fleet";
 import { MetricsService } from "../../bindings/github.com/moomora/klyx/internal/appbridge/index.js";
 
+// A reply applies only when no later request was made: an earlier read's
+// late reply never replaces a newer one (Settings S3b §3.2).
+let metricsGen = 0;
+
 export async function getClusterMetrics(cluster: string, forceReprobe: boolean): Promise<void> {
+  const g = ++metricsGen;
   useFleet.getState().setMetricsLoading(cluster);
   try {
     const dto = (await MetricsService.GetClusterMetrics(cluster, forceReprobe)) as MetricsDTO;
-    // Ignore a stale response if the user navigated to another cluster.
-    if (useFleet.getState().metrics.cluster !== cluster) return;
+    // Ignore a stale response if the user navigated to another cluster,
+    // or asked again since.
+    if (g !== metricsGen || useFleet.getState().metrics.cluster !== cluster) return;
     useFleet.getState().setMetrics(cluster, dto);
   } catch (e) {
     console.error("getClusterMetrics", e);
-    // Clear the loading flag so the overview doesn't get stuck on "Loading…".
-    if (useFleet.getState().metrics.cluster === cluster) {
-      useFleet.setState((s) => ({ metrics: { ...s.metrics, loading: false } }));
+    // Clear the loading flag so the overview doesn't get stuck on "Loading…";
+    // a readout kept from an earlier read is said as such (Settings S3b
+    // §3.4). Only the latest request's failure marks it.
+    if (g === metricsGen && useFleet.getState().metrics.cluster === cluster) {
+      useFleet.setState((s) => ({ metrics: { ...s.metrics, loading: false, stale: s.metrics.dto != null } }));
     }
   }
 }
@@ -25,6 +33,9 @@ export type SparklinesDTO = {
   message?: string;
   cpu: PointDTO[];
   mem: PointDTO[];
+  sentence?: string;
+  lineage?: string;
+  noData?: string;
 };
 
 const failedSparklines = (message: string): SparklinesDTO => ({ available: false, message, cpu: [], mem: [] });

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/moomora/klyx/internal/clock"
-	"github.com/moomora/klyx/internal/metrics"
 	"github.com/moomora/klyx/internal/routemetrics"
 )
 
@@ -33,7 +32,8 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 	}
 
 	mr := c.readMetrics(ctx, now)
-	cap, transport := mr.cap, mr.transport
+	defer mr.release()
+	cap := mr.cap
 
 	if !cap.Available {
 		msg := "metrics unavailable"
@@ -43,14 +43,18 @@ func (c *ClusterConn) RouteMetrics(ctx context.Context, routeKeys []string) (map
 		return nil, routemetrics.Status{Available: false, Message: msg}
 	}
 
-	src := routemetrics.NewEnvoyClusterSource(metrics.NewClient(transport))
+	src := routemetrics.NewEnvoyClusterSource(mr.client)
 	out, st, err := src.QueryRouteMetrics(ctx, routeKeys)
 	if err != nil {
 		return nil, routemetrics.Status{Available: false, Message: "route metrics query failed: " + err.Error()}
 	}
-	if c.credentialMoved(mr.rev) {
-		return nil, routemetrics.Status{Available: false, Message: "metrics unavailable: " + reasonCredentialChanged}
+	if why := mr.unsettled(); why != "" {
+		return nil, routemetrics.Status{Available: false, Message: "metrics unavailable: " + why}
 	}
 	st.UpdatedAt = now // fleet stamps freshness on a produced result
+	st.Sentence, st.Lineage = cap.Sentence, cap.Lineage
+	if w := mr.noData(); st.NoSeries && w != "" {
+		st.Message = w + ": " + st.Message
+	}
 	return out, st
 }

@@ -82,6 +82,9 @@ type FleetPlanDeps struct {
 	// Alertmanager is the block a connection for an entry would use,
 	// resolved against the active installations (Settings S3a §2.2)
 	Alertmanager func(config.ClusterConfig) *config.EndpointConfig
+	// Sources are the installations in force, of every kind: a plan lists
+	// where a change moves a cluster's Loki and metrics (Settings S3b §3.5)
+	Sources func() []config.SourceConfig
 	// ResolveSources checks that a runtime candidate - the running fleet
 	// with a plan's change - resolves against the installations in force;
 	// SourcesRevision is their revision, which a plan binds; Resubscribe
@@ -609,6 +612,19 @@ func (s *ConfigService) planCluster(c fleetCand) fleetPlanned {
 				x.plan.Changes = append(x.plan.Changes, PlanChangeDTO{ID: "fleet.alerts", Label: "Alerts", From: amSourceOf(was), To: amSourceOf(now)})
 			}
 		}
+		// where its log history and metrics come from, when the change
+		// moves them: the running connection follows (S3b §3.5)
+		if fp.d.Sources != nil && running {
+			sources := fp.d.Sources()
+			for _, k := range []struct{ kind, id, label string }{
+				{config.EndpointLoki, "fleet.logs", "Log history"},
+				{config.EndpointMetrics, "fleet.metrics", "Metrics"},
+			} {
+				if was, now := config.ConnectionBlock(k.kind, sources, run), config.ConnectionBlock(k.kind, sources, x.cand); amSourceKey(was) != amSourceKey(now) {
+					x.plan.Changes = append(x.plan.Changes, PlanChangeDTO{ID: k.id, Label: k.label, From: kindSourceOf(k.kind, was), To: kindSourceOf(k.kind, now)})
+				}
+			}
+		}
 		x.plan.Writes = x.edit != nil
 		if published && !x.cand.IsProtected() {
 			x.plan.Interlock = &InterlockDTO{Phrase: name, Why: "Destructive actions on " + name + " will no longer ask for its name to be typed, and AI egress stops treating it as protected."}
@@ -903,6 +919,27 @@ func amSourceOf(e *config.EndpointConfig) string {
 		return "its own Service"
 	}
 	return "discovery in the cluster"
+}
+
+// kindSourceOf is where a kind's block reads from, in words: Loki is
+// never discovered, so a Loki reader with no source has none (Codex's
+// review of S3b-1, R2); the others say amSourceOf's words.
+func kindSourceOf(kind string, e *config.EndpointConfig) string {
+	if kind == config.EndpointLoki && amSourceKey(e) == "discovery" {
+		return "no log history (Loki is never discovered)"
+	}
+	return amSourceOf(e)
+}
+
+// kindWords is what a kind's readers read, in a plan's words.
+func kindWords(kind string) string {
+	switch kind {
+	case config.EndpointLoki:
+		return "log history"
+	case config.EndpointMetrics:
+		return "metrics"
+	}
+	return "alerts"
 }
 
 // amSourceKey is where an Alertmanager block's alerts come from, for a

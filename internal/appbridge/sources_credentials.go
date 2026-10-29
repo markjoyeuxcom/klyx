@@ -12,17 +12,19 @@ import (
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
-// Settings S3a §5: an installation's credential (source/<id>) is an
-// immediate action on the installation in force, as a cluster endpoint's
-// is: Store, Remove and Test under the endpoint lock, then the fleet Apply
-// lock. It never adopts the installation's file block, and a credential is
-// never copied from a cluster's record.
+// Settings S3a §5, S3b §7: an installation's credential (source/<id>, of
+// its kind) is an immediate action on the installation in force, as a
+// cluster endpoint's is: Store, Remove and Test under the endpoint lock,
+// then the fleet Apply lock. It never adopts the installation's file
+// block, and a credential is never copied from a cluster's record.
 
 // WireSourceCredentials gives the endpoint actions the installations in
-// force and their test (main: the registry's AlertSources and
-// InstallationStatus).
-func WireSourceCredentials(es *EndpointsService, active func() *fleet.AlertSources, status func(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error)) {
-	es.sources, es.sourceStatus = active, status
+// force and their tests (main: the registry's AlertSources,
+// InstallationStatus for Alertmanager and InstallationProbe for Loki and
+// metrics).
+func WireSourceCredentials(es *EndpointsService, active func() *fleet.AlertSources, status func(ctx context.Context, id string, revision uint64) (alertmanager.Status, string, error),
+	probe func(ctx context.Context, id string, revision uint64) (words, where string, err error)) {
+	es.sources, es.sourceStatus, es.sourceProbe = active, status, probe
 }
 
 // reviewedSource is the installation the person reviewed, still in force
@@ -84,7 +86,7 @@ func (s *EndpointsService) SetSourceCredential(id, revision, secret string) Endp
 	if err := s.store.Set(endpointcred.SourceAccount(id), v); err != nil {
 		return fail(red, err)
 	}
-	s.revs.Bump("source/"+id, config.EndpointAlertmanager, true)
+	s.revs.Bump(endpointcred.SourceAccount(id), src.Kind, true)
 	return EndpointActionDTO{OK: true, Message: "Stored in the keychain for " + origin + "."}
 }
 
@@ -101,10 +103,11 @@ func (s *EndpointsService) RemoveSourceCredential(id, revision string) EndpointA
 	if s.fleetLock != nil {
 		defer s.fleetLock()()
 	}
-	if _, _, err := s.reviewedSource(id, revision); err != nil {
+	src, _, err := s.reviewedSource(id, revision)
+	if err != nil {
 		return fail(red, err)
 	}
-	s.revs.Revoke("source/"+id, config.EndpointAlertmanager)
+	s.revs.Revoke(endpointcred.SourceAccount(id), src.Kind)
 	if err := s.store.Delete(endpointcred.SourceAccount(id)); err != nil {
 		return EndpointActionDTO{Message: "Removed from use; the keychain still holds it - " + red.Text(err.Error())}
 	}
@@ -112,20 +115,31 @@ func (s *EndpointsService) RemoveSourceCredential(id, revision string) EndpointA
 }
 
 // TestSource reads the installation the person reviewed once, at the
-// revision shown, through the transport its reads take: its status, never
-// its alerts. The read is fenced by that revision (R3).
+// revision shown, through the transport its reads take: its reachability,
+// never anything of a member - Alertmanager's status, Loki's build info,
+// metrics' liveness (S3b §7). The read is fenced by that revision (R3).
 func (s *EndpointsService) TestSource(id, revision string) EndpointActionDTO {
 	s.mu.Lock()
-	_, rev, err := s.reviewedSource(id, revision)
+	src, rev, err := s.reviewedSource(id, revision)
 	s.mu.Unlock()
 	if err != nil {
 		return fail(safehttp.NewRedactor(), err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
+	defer cancel()
+	if src.Kind != config.SourceKindAlertmanager {
+		if s.sourceProbe == nil {
+			return EndpointActionDTO{Message: "Test is not available"}
+		}
+		words, where, err := s.sourceProbe(ctx, id, rev)
+		if err != nil {
+			return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}
+		}
+		return EndpointActionDTO{OK: true, Message: "Available: " + words + " at " + where + "."}
+	}
 	if s.sourceStatus == nil {
 		return EndpointActionDTO{Message: "Test is not available"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), metricsTimeout)
-	defer cancel()
 	st, where, err := s.sourceStatus(ctx, id, rev)
 	if err != nil {
 		return EndpointActionDTO{Message: "Unavailable: " + safehttp.NewRedactor().Text(err.Error())}

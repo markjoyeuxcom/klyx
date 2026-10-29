@@ -46,6 +46,7 @@ import { useInspectorAI } from "../ai/AIExplain";
 import { usePinnedSubject } from "./usePinnedSubject";
 import { PinnedGone, expectsOther } from "./PinnedGone";
 import { expectPin } from "../nav/inspectorPin";
+import { SourceLine } from "./SourceLine";
 
 // columns: dot | name | roles | status | version | cpu alloc/cap | mem alloc/cap | taints | age
 type NodeFilter = "all" | "attention" | "unknown" | "cordoned" | "tainted";
@@ -519,10 +520,13 @@ export function NodesView({ cluster }: { cluster: string }) {
 
   // Live per-node usage (pod-attributed), joined by node name at render.
   const [util, setUtil] = useState<NodeUtilizationResultDTO | null>(null);
+  // a reply applies only when no later read was asked for (Settings S3b §3.2)
+  const utilGen = useRef(0);
   useEffect(() => {
     let live = true;
+    const g = ++utilGen.current;
     setUtil(null);
-    void getNodeUtilization(cluster).then((r) => { if (live) setUtil(r); });
+    void getNodeUtilization(cluster).then((r) => { if (live && g === utilGen.current) setUtil(r); });
     return () => { live = false; };
   }, [cluster]);
   const usageByNode = useMemo(() => {
@@ -530,7 +534,10 @@ export function NodesView({ cluster }: { cluster: string }) {
     for (const it of util?.items ?? []) m.set(it.node, { cpu: it.cpu, mem: it.mem });
     return m;
   }, [util]);
-  const refreshUsage = () => { void getNodeUtilization(cluster).then((r) => { if (useFleet.getState().nodes.cluster === cluster) setUtil(r); }); };
+  const refreshUsage = () => {
+    const g = ++utilGen.current;
+    void getNodeUtilization(cluster).then((r) => { if (g === utilGen.current && useFleet.getState().nodes.cluster === cluster) setUtil(r); });
+  };
 
   // Only rows read for THIS cluster are shown or counted.
   const scopedNodes = useMemo(() => (mine ? nodes.items : []), [nodes.items, mine]);
@@ -715,6 +722,7 @@ export function NodesView({ cluster }: { cluster: string }) {
   if (rowsRefreshing) notices.push(<div key="a4" role="status" data-testid="rows-refreshing" className="t-secondary" style={statusLine}>Rows as of {rowsAsOf} - refreshing; the totals are the cluster summary's.{nodes.rowsState?.refreshError ? ` Last re-read failed: ${nodes.rowsState.refreshError}` : ""}</div>);
   if (discoveryGap) notices.push(<div key="gap" role="status" data-testid="discovery-gap" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)", overflowWrap: "anywhere" }}>Discovery re-check failing - {discoveryGap}. A capability gap only; the rows keep their own state.</div>);
   if (util && !util.available) notices.push(<div key="util" data-testid="node-util-unavailable" className="t-secondary" style={statusLine}>Live usage unavailable - {util.message || "no metrics source"}. Usage columns are hidden.<EndpointSettingsLink text={util.message} cluster={cluster} kind="metrics" /></div>);
+  if (util && util.available && (util.sentence || util.noData)) notices.push(<SourceLine key="src" sentence={util.sentence} noData={util.noData} testid="nodes-source" />);
   if (util && util.available && util.message) notices.push(<div key="caveat" role="status" className="t-secondary" style={{ ...statusLine, color: "var(--color-text-warning)" }}>Usage caveat: {util.message}</div>);
   if (simulating) notices.push(<SurvivabilityModule key="sim" cluster={cluster} nodes={scopedNodes} />);
   // coverage S11a: the extended parts' own state - a budget cut, a failed

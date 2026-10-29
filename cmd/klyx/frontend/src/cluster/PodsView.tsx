@@ -46,6 +46,7 @@ import { PodIdentity } from "./IdentityBlocks";
 import { DebugChooser, DebugContainersBlock, PodResourcesBlock, PodExtendedBlock, debugConfirmText, podStale, type DebugChoice } from "./PodS6";
 import { PodClaimsBlock } from "./DRABlocks";
 import { SyncingChip } from "./staleness";
+import { SourceLine } from "./SourceLine";
 
 // Pods lens on the shared workspace template (2026-10 redesign pilot). The
 // template owns geometry; this file owns pod data, filters, selection and the
@@ -793,6 +794,7 @@ function PodInspector({ cluster, row, uid, nowS, gone, replaced, rsEv, detail, l
         {describing && live && <DescribePane cluster={cluster} kindArg="pod" kind="Pod" namespace={namespace} name={name} expectUid={uid || undefined} onClose={() => setDescribing(false)} />}
 
         <InspectorBlock title="Containers" count={p.containers.length}>
+          {ctUsage !== null && ctUsage.available && <SourceLine sentence={ctUsage.sentence} noData={ctUsage.noData} testid="pod-usage-source" />}
           {ctUsage !== null && !ctUsage.available && (
             <div className="t-secondary">Live usage unavailable - {(ctUsage.message || "no metrics source").replace(/^metrics unavailable:\s*/, "")}<EndpointSettingsLink text={ctUsage.message} cluster={cluster} kind="metrics" /></div>
           )}

@@ -40,7 +40,7 @@ func TestRemoveStopsAnAuthenticatedRedirectHop(t *testing.T) {
 	auth.Live = reg.Live("prd", config.EndpointMetrics, reg.Revision("prd", config.EndpointMetrics))
 	q := NewDirectTransportAuth(srv.URL, auth, safehttp.NewClient(DirectPolicy(3*time.Second, false)))
 	done := make(chan error, 1)
-	go func() { _, _, err := q.InstantQuery(context.Background(), "up"); done <- err }()
+	go func() { _, _, err := q.q.InstantQuery(context.Background(), "up"); done <- err }()
 	<-entered
 	reg.Revoke("prd", config.EndpointMetrics)
 	close(release)
@@ -75,7 +75,7 @@ func TestProxiedNon2xxBodyIsCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := NewProxyTransport(rc, ServiceCandidate{Namespace: "n", Name: "prom", Port: "9090"})
-	code, _, err := q.InstantQuery(context.Background(), "up")
+	code, _, err := q.q.InstantQuery(context.Background(), "up")
 	if err == nil || !strings.Contains(err.Error(), "exceeded") {
 		t.Fatalf("oversized non-2xx body was not rejected by cap: code=%d err=%v", code, err)
 	}
@@ -95,7 +95,7 @@ func TestResponseCompletingAfterARevocationIsDropped(t *testing.T) {
 	auth.Live = reg.Live("prd", config.EndpointMetrics, reg.Revision("prd", config.EndpointMetrics))
 	q := NewDirectTransportAuth(srv.URL, auth, safehttp.NewClient(DirectPolicy(3*time.Second, false)))
 	done := make(chan error, 1)
-	go func() { _, _, err := q.InstantQuery(context.Background(), "up"); done <- err }()
+	go func() { _, _, err := q.q.InstantQuery(context.Background(), "up"); done <- err }()
 	<-entered
 	reg.Revoke("prd", config.EndpointMetrics)
 	close(release)
@@ -123,7 +123,7 @@ func TestACredentialNeverRewritesTheResponse(t *testing.T) {
 		if capb := Probe(context.Background(), Resolution{Transport: q}); !capb.Available {
 			t.Fatalf("%q: a valid response read unavailable: %+v", token, capb)
 		}
-		got, err := NewClient(q).InstantVector(context.Background(), "up")
+		got, err := NewClient(q, Scope{}).InstantVector(context.Background(), raw("up"))
 		if err != nil || len(got) != 1 || got[0].Labels["pod"] != "api-7" || got[0].Labels["namespace"] != "team" || got[0].Value != 42 {
 			t.Fatalf("%q: the data changed: %+v %v", token, got, err)
 		}

@@ -14,6 +14,7 @@ import { SettingField } from "../SettingField";
 import { ENTRIES } from "../registry";
 import { Group, bytes, plural, type SectionProps } from "./common";
 import { SourcesPanel } from "./SourcesPanel";
+import type { SourceKind } from "../../bridge/sources";
 import { isStorageKey, readStored } from "../storage";
 
 // The sections that hold the existing panels (S1 §1), each with its
@@ -55,30 +56,48 @@ function useAlertParts(): { cluster: string; coverage: string }[] {
   return out;
 }
 
+// The Sources panels, one per kind, in the page's order (S3b §8).
+const SOURCE_PANELS: { kind: SourceKind; title: string }[] = [
+  { kind: "alertmanager", title: "Alertmanager" },
+  { kind: "loki", title: "Logs" },
+  { kind: "metrics", title: "Metrics" },
+];
+
 export function ObservabilitySection({ say, ready }: SectionProps) {
   const parts = useAlertParts();
   const partsKey = parts.map((p) => `${p.cluster}:${p.coverage}`).join(",");
   const last = useRef<EndpointsState | null>(null);
-  // where alerts come from (S3a §8) is the section's sentence once read
-  const sources = useRef<string | null>(null);
+  // where each kind comes from (S3a §8, S3b §8) is the section's sentence
+  // once every kind has read: "Alerts: ...; Logs: ...; Metrics: ..."
+  const kinds = useRef<Partial<Record<SourceKind, string>>>({});
+  const sourcesSentence = () => {
+    const said = SOURCE_PANELS.map((p) => kinds.current[p.kind]).filter((x): x is string => !!x);
+    return said.length === SOURCE_PANELS.length ? said.join("; ") : null;
+  };
   const onLoaded = (s: EndpointsState) => {
     last.current = s;
-    say(sources.current ?? observabilitySentence(s, parts));
+    say(sourcesSentence() ?? observabilitySentence(s, parts));
   };
-  // the section is ready, and an anchor applied, once both panels have
+  // the section is ready, and an anchor applied, once every panel has
   // read, or failed to: an installation's row must exist before its anchor
-  // is judged gone (Codex's review of S3a-4c, R6)
-  const settled = useRef({ endpoints: false, sources: false });
-  const settle = (which: "endpoints" | "sources") => {
+  // is judged gone (Codex's review of S3a-4c, R6; S3b §13)
+  const settled = useRef<Record<string, boolean>>({});
+  const settle = (which: string) => {
     settled.current[which] = true;
-    if (settled.current.endpoints && settled.current.sources) ready();
+    if (settled.current.endpoints && SOURCE_PANELS.every((p) => settled.current[p.kind])) ready();
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (last.current && !sources.current) say(observabilitySentence(last.current, parts)); }, [partsKey]);
+  useEffect(() => { if (last.current && !sourcesSentence()) say(observabilitySentence(last.current, parts)); }, [partsKey]);
   return (
     <>
-      <Group title="Alert sources">
-        <SourcesPanel onLoaded={(s) => { sources.current = s.sentence; say(s.sentence); }} onSettled={() => settle("sources")} />
+      <Group title="Sources">
+        <p className="settings-group-note">One panel per kind: the installations several clusters share, and where each cluster reads its alerts, logs and metrics.</p>
+        {SOURCE_PANELS.map((p) => (
+          <section key={p.kind} data-testid={`sources-${p.kind}`} aria-label={`${p.title} sources`}>
+            <h4 className="settings-subhead">{p.title}</h4>
+            <SourcesPanel kind={p.kind} onLoaded={(s) => { kinds.current[p.kind] = s.sentence; const all = sourcesSentence(); if (all) say(all); }} onSettled={() => settle(p.kind)} />
+          </section>
+        ))}
       </Group>
       <Group title="External endpoints">
         <EndpointsPanel onLoaded={onLoaded} onSettled={() => settle("endpoints")} />
@@ -92,7 +111,7 @@ export function ObservabilitySection({ say, ready }: SectionProps) {
       </Group>
       <Group title="Installations">
         <p className="settings-group-note">
-          An installation is an Alertmanager several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has an alertmanager block of its own. Klyx reads it once for its members and gives each its share. Alert sources above adds, edits and removes them through Review and apply.
+          An installation is an Alertmanager, a Loki or a Prometheus several clusters share, written once under sources in fleet.yaml; each cluster it serves subscribes to it, unless the cluster has a block of that kind of its own. Klyx reads it for its members, each under its own scope. Sources above adds, edits and removes them through Review and apply, each kind in its panel.
         </p>
         <InstallationFields />
       </Group>

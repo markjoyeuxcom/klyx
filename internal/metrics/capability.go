@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 
+	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/safehttp"
 )
 
@@ -11,13 +12,14 @@ import (
 // unavailable with the real error.
 func Probe(ctx context.Context, res Resolution) MetricsCapability {
 	out := MetricsCapability{Mode: res.Mode, Source: res.Source, Warning: res.Warning, Reason: res.Reason}
-	if res.Transport == nil {
+	if res.Transport.IsZero() {
 		return out // Available stays false; Reason already set for unavailable
 	}
-	if err := NewClient(res.Transport).Liveness(ctx); err != nil {
+	if err := NewClient(res.Transport, Scope{}).Liveness(ctx); err != nil {
 		// the transport already redacted its own credential; the general
 		// credential shapes go too before the reason reaches the page (C5 §5)
 		out.Reason = safehttp.NewRedactor().Text(err.Error())
+		out.Withdrawn = readfence.Failed(err) || ctx.Err() != nil
 		return out
 	}
 	out.Available = true

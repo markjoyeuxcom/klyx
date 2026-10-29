@@ -120,6 +120,10 @@ type alertBuckets struct {
 	retired map[ConnID]bool
 	gates   map[string]chan struct{}
 	disc    map[discKey]*amDiscovery
+	// mdisc are the hosts' metrics discoveries, and slots the hosted
+	// requests in flight per host (Settings S3b §3.1)
+	mdisc map[discKey]metricsDisc
+	slots hostSlots
 }
 
 type discKey struct {
@@ -130,7 +134,7 @@ type discKey struct {
 func newAlertBuckets(ctx context.Context, sources *AlertSources, creds Credentials, clk clock.Clock, host func(string) (*ClusterConn, bool)) *alertBuckets {
 	return &alertBuckets{ctx: ctx, sources: sources, creds: creds, clk: clk, host: host,
 		cadence: healthsrc.AlertsCadence, timeout: healthsrc.AlertsReadTimeout,
-		buckets: map[bucketKey]*bucket{}, members: map[ConnID]bucketKey{}, retired: map[ConnID]bool{}, gates: map[string]chan struct{}{}, disc: map[discKey]*amDiscovery{}}
+		buckets: map[bucketKey]*bucket{}, members: map[ConnID]bucketKey{}, retired: map[ConnID]bool{}, gates: map[string]chan struct{}{}, disc: map[discKey]*amDiscovery{}, mdisc: map[discKey]metricsDisc{}}
 }
 
 // access is an installation's access generation now (S3a §3.4): a hosted

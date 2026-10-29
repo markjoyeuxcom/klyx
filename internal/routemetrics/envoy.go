@@ -2,21 +2,17 @@ package routemetrics
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moomora/klyx/internal/metrics"
 )
 
-// Envoy metric and label names. SINGLE source of truth — native verification
-// confirms/adjusts these before merge (see the spec's hard gate). Do not
-// inline these strings elsewhere.
+// Envoy metric and label names, as the registered templates read them
+// (Settings S3b §3.3: the queries are metrics' templates).
 const (
-	mRqTotal     = "envoy_cluster_upstream_rq_total"
-	mRqTime      = "envoy_cluster_upstream_rq_time_bucket"
-	mRqXX        = "envoy_cluster_upstream_rq_xx"
-	lClusterName = "envoy_cluster_name"
-	lRespClass   = "envoy_response_code_class"
-	rateWindow   = "5m"
+	mRqTotal     = metrics.EnvoyRqTotal
+	mRqXX        = metrics.EnvoyRqXX
+	lClusterName = metrics.EnvoyClusterName
+	lRespClass   = metrics.EnvoyRespClass
 )
 
 // EnvoyClusterSource builds Envoy-cluster PromQL and reduces the result into
@@ -31,25 +27,34 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	if len(routeKeys) == 0 {
 		return map[string]RouteMetrics{}, Status{Available: true}, nil
 	}
-	sel := buildSelector(routeKeys)
+	routes := metrics.Routes{Keys: routeKeys}
 
-	rps, err := s.client.InstantVector(ctx, fmt.Sprintf("sum by (%s)(rate(%s{%s}[%s]))", lClusterName, mRqTotal, sel, rateWindow))
+	// seen counts the series the answers held, a non-finite one included,
+	// and usable those with a value: an answer whose series all lack one is
+	// not an answer with none (Settings S3b §3.3)
+	seen, usable := 0, 0
+	vector := func(q metrics.Query) ([]metrics.LabeledSample, error) {
+		v, n, err := s.client.InstantVectorSeen(ctx, q)
+		seen, usable = seen+n, usable+len(v)
+		return v, err
+	}
+	rps, err := vector(metrics.RouteRPS.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	p50, err := s.client.InstantVector(ctx, fmt.Sprintf("histogram_quantile(0.50, sum by (%s, le)(rate(%s{%s}[%s])))", lClusterName, mRqTime, sel, rateWindow))
+	p50, err := vector(metrics.RouteP50.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	p99, err := s.client.InstantVector(ctx, fmt.Sprintf("histogram_quantile(0.99, sum by (%s, le)(rate(%s{%s}[%s])))", lClusterName, mRqTime, sel, rateWindow))
+	p99, err := vector(metrics.RouteP99.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	rq5xx, err := s.client.InstantVector(ctx, fmt.Sprintf("sum by (%s)(rate(%s{%s,%s=\"5\"}[%s]))", lClusterName, mRqXX, sel, lRespClass, rateWindow))
+	rq5xx, err := vector(metrics.Route5xx.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	rqall, err := s.client.InstantVector(ctx, fmt.Sprintf("sum by (%s)(rate(%s{%s}[%s]))", lClusterName, mRqXX, sel, rateWindow))
+	rqall, err := vector(metrics.RouteAll.With(routes))
 	if err != nil {
 		return nil, Status{}, err
 	}
@@ -58,23 +63,38 @@ func (s *EnvoyClusterSource) QueryRouteMetrics(ctx context.Context, routeKeys []
 	if len(out) > 0 {
 		return out, Status{Available: true}, nil
 	}
+	if seen > 0 && usable == 0 {
+		return out, Status{Available: true, Message: msgNoUsableRouteValue}, nil
+	}
 
 	// No matched series: distinguish "Envoy not scraped at all" from "these
 	// routes are just idle / mislabeled". Reuse the verified rq-total constant.
-	// Existence probe is intentionally UNSCOPED (counts all Envoy rq_total
-	// series, not just httproute). Per the spec it answers "is Envoy scraped at
-	// all"; the exact wording vs scoping is a native-verification decision.
-	exist, err := s.client.InstantScalar(ctx, fmt.Sprintf("count(%s)", mRqTotal))
+	// The existence probe counts every Envoy rq_total series, not just
+	// httproute's, under the reader's scope (Settings S3b §3.3): it answers
+	// "is Envoy scraped for this cluster at all"; its wording under a scope
+	// is S3b-2c's.
+	exist, err := s.client.InstantScalar(ctx, metrics.EnvoyScraped.With(metrics.None{}))
 	if err != nil {
 		return nil, Status{}, err
 	}
-	// Real Prometheus count() over no series returns an empty vector (-> Absent);
-	// the ==0 check is defensive against a malformed response.
-	if exist.Absent || exist.Value == 0 {
-		return out, Status{Available: false, Message: "no envoy_cluster_* series found"}, nil
+	// Real Prometheus count() over no series returns an empty vector
+	// (-> Empty); the ==0 check is defensive against a malformed response. A
+	// count with no usable value proves no absence (S3b §3.3).
+	switch {
+	case exist.Empty || (!exist.Absent && exist.Value == 0):
+		return out, Status{Available: false, NoSeries: true, Message: "no envoy_cluster_* series found"}, nil
+	case exist.Absent:
+		return out, Status{Available: true, Message: msgNoUsableEnvoyCount}, nil
 	}
 	return out, Status{Available: true, Message: "no route series matched this topology"}, nil
 }
+
+// What a read whose series have no usable value says: never that it found
+// none (Settings S3b §3.3).
+const (
+	msgNoUsableRouteValue = "the route series have no usable value (NaN or Inf)"
+	msgNoUsableEnvoyCount = "no route series matched this topology, and the check for Envoy's series has no usable value (NaN or Inf)"
+)
 
 type acc struct {
 	rps     float64

@@ -42,7 +42,7 @@ func TestServiceRefPathReachesTheProxy(t *testing.T) {
 
 type proxyOnly struct{ rc rest.Interface }
 
-func (p proxyOnly) Direct(string, Auth, bool) Querier { return nil }
-func (p proxyOnly) Proxy(c ServiceCandidate, tenant string) Querier {
+func (p proxyOnly) Direct(string, Auth, bool) Transport { return Transport{} }
+func (p proxyOnly) Proxy(c ServiceCandidate, tenant string) Transport {
 	return NewProxyTransportTenant(p.rc, c, tenant)
 }

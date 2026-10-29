@@ -26,6 +26,7 @@ import (
 	"github.com/moomora/klyx/internal/observe"
 	"github.com/moomora/klyx/internal/readfence"
 	"github.com/moomora/klyx/internal/routemetrics"
+	"github.com/moomora/klyx/internal/sources"
 	"github.com/moomora/klyx/internal/workloads"
 )
 
@@ -1137,11 +1138,11 @@ func (g guardedConn) RuleMetrics(ctx context.Context, namespace, name string) (r
 	return g.r.c.conn.RuleMetrics(ctx, namespace, name)
 }
 
-func (g guardedConn) ChatMetricsRange(ctx context.Context, promql string, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, error) {
+func (g guardedConn) ChatMetricsRange(ctx context.Context, q metrics.Query, start, end time.Time, step time.Duration) ([]metrics.LabeledSeries, sources.Lineage, error) {
 	if err := g.r.check(); err != nil {
-		return nil, err
+		return nil, sources.Lineage{}, err
 	}
-	return g.r.c.conn.ChatMetricsRange(ctx, promql, start, end, step)
+	return g.r.c.conn.ChatMetricsRange(ctx, q, start, end, step)
 }
 
 func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*unstructured.Unstructured, error) {
@@ -1151,10 +1152,11 @@ func (g guardedConn) FluxObject(ctx context.Context, kind, ns, name string) (*un
 	return g.r.c.conn.FluxObject(ctx, kind, ns, name)
 }
 
-// recordLineage keeps an alerts read's lineage with the conversation, for
-// good (Settings S3a §4.2). A read without a source records nothing. Rows
-// read under terms that have since moved are refused instead: a tool does
-// not use them, so the conversation is not ended over them.
+// recordLineage keeps a read's lineage with the conversation, for good
+// (Settings S3a §4.2; S3b §4: alerts, logs and metrics). A read without a
+// source records nothing. Data read under terms that have since moved is
+// refused instead: a tool does not use it, so the conversation is not
+// ended over it.
 func (r *turnRunner) recordLineage(l alertmanager.Lineage) error {
 	if l == (alertmanager.Lineage{}) {
 		return nil
@@ -1163,6 +1165,9 @@ func (r *turnRunner) recordLineage(l alertmanager.Lineage) error {
 	alertTerms.RLock()
 	defer alertTerms.RUnlock()
 	if p := lineageProblem(r.c.cluster, l); p != "" {
+		if l.Kind != "" {
+			return errors.New(p + "; ask again to read it under the current terms")
+		}
 		return errors.New(p + "; Klyx reads them again within " + healthsrc.AlertsCadence.String())
 	}
 	r.s.mu.Lock()

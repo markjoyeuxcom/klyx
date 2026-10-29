@@ -152,7 +152,7 @@ func (s *GatewayService) GetRuleMetrics(ctx context.Context, cluster, namespace,
 
 func (s *GatewayService) ruleMetricsDTO(cluster string, res routemetrics.GatewayRules) RuleMetricsDTO {
 	dto := RuleMetricsDTO{
-		Status:         RouteMetricsStatusDTO{Available: res.Status.Available, Message: res.Status.Message, UpdatedAt: rfc3339(res.Status.UpdatedAt)},
+		Status:         RouteMetricsStatusDTO{Available: res.Status.Available, Message: res.Status.Message, UpdatedAt: rfc3339(res.Status.UpdatedAt), Sentence: res.Status.Sentence, Lineage: res.Status.Lineage},
 		NoEndpoint:     res.Status.NoEndpoint,
 		Scope:          string(res.Scope),
 		ScopeNote:      res.ScopeNote,

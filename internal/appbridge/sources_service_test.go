@@ -47,10 +47,12 @@ func newSourcesRig(t *testing.T, sources ...config.SourceConfig) *sourcesRig {
 			_, err := r.active.Apply(s, run)
 			return err
 		},
-		AlertWork: func(clusters []string) []PlanWorkDTO {
+		Work: func(moved map[string][]string) []PlanWorkDTO {
 			var out []PlanWorkDTO
-			for _, c := range clusters {
-				out = append(out, PlanWorkDTO{ID: "conv:" + c, Kind: kindChat, Cluster: c, What: "a chat on " + c + " holding alerts"})
+			for _, k := range observabilityKinds {
+				for _, c := range moved[k] {
+					out = append(out, PlanWorkDTO{ID: "conv:" + k + ":" + c, Kind: kindChat, Cluster: c, What: "a chat on " + c + " holding " + kindNames[k].noun})
+				}
 			}
 			return out
 		},
@@ -110,7 +112,7 @@ func TestASourcesPlanAddsAnInstallationAndASubscription(t *testing.T) {
 	for _, w := range p.Ends {
 		ends[w.ID] = true
 	}
-	if !ends["alerts:dev"] || !ends["alerts:prd"] || !ends["conv:dev"] || !ends["conv:prd"] {
+	if !ends["alerts:dev"] || !ends["alerts:prd"] || !ends["conv:alertmanager:dev"] || !ends["conv:alertmanager:prd"] {
 		t.Fatalf("ends: %+v", p.Ends)
 	}
 	if res := r.applySources(p); !res.OK {
@@ -265,14 +267,14 @@ func TestAnInstallationsRemovalIsOneTransaction(t *testing.T) {
 // blocks, never a legacy block or anything of S2's; it writes nothing.
 func TestUseTheFilesValuesForSources(t *testing.T) {
 	r := newSourcesRig(t)
-	if p := r.svc.PlanSourcesFromFile(); !strings.Contains(p.Refused, "the ones in force") {
+	if p := r.svc.PlanSourcesFromFile(""); !strings.Contains(p.Refused, "the ones in force") {
 		t.Fatalf("nothing differs: %+v", p)
 	}
 	r.handEdit("    context: dev-ctx\n", "    context: dev-ctx\n    group: web\n    alertmanager:\n      source: lgtm-we\n")
 	r.handEdit("    group: platform\n", "    group: platform\n    alertmanager:\n      endpoint: https://am.example\n")
 	doc := r.file() + "sources:\n  - id: lgtm-we\n    kind: alertmanager\n    host: prd\n    discover: true\n    memberLabel: cluster\n"
 	r.handEdit(r.file(), doc)
-	p := r.svc.PlanSourcesFromFile()
+	p := r.svc.PlanSourcesFromFile("")
 	if p.Refused != "" || p.Writes {
 		t.Fatalf("%+v", p)
 	}
@@ -300,7 +302,7 @@ func TestTheSourcesState(t *testing.T) {
 	if _, err := r.active.Apply(r.active.Sources(), r.cs.fleetClusters()); err != nil {
 		t.Fatal(err)
 	}
-	st := r.svc.GetSources()
+	st := r.svc.GetSources("")
 	if st.Sentence != "Alerts: 1 cluster from 1 installation, 1 off" {
 		t.Fatalf("%q", st.Sentence)
 	}
@@ -358,7 +360,7 @@ func TestALegacyRowSaysItsScopeSentence(t *testing.T) {
 		{"discovery, no block", config.AMDiscovered, nil, "discovered in this cluster, " + unfiltered},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := scopeSentence(config.AMResolution{Mode: tc.mode}, config.SourceConfig{}, tc.block); got != tc.want {
+			if got := scopeSentence(config.EndpointAlertmanager, config.AMResolution{Mode: tc.mode}, config.SourceConfig{}, tc.block); got != tc.want {
 				t.Fatalf("%q", got)
 			}
 		})
@@ -367,7 +369,7 @@ func TestALegacyRowSaysItsScopeSentence(t *testing.T) {
 	r := newSourcesRig(t)
 	SetRunningEndpoint(r.cs, "dev", config.EndpointAlertmanager, nil, &config.EndpointConfig{ServiceRef: &config.MetricsServiceRef{Namespace: "monitoring", Name: "alertmanager-main", Port: "web"}, Match: map[string]string{"cluster": "dev"}})
 	seen := false
-	for _, row := range r.svc.GetSources().Subscriptions {
+	for _, row := range r.svc.GetSources("").Subscriptions {
 		if row.Cluster == "dev" {
 			seen = true
 			if row.Sentence != "from the Service monitoring/alertmanager-main:web on this cluster, filtered by cluster=dev" || !row.Legacy {
